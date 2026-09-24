@@ -175,46 +175,26 @@ func byedpiPrims(opts desyncOpts) []Primitive {
 	}
 }
 
-// softByedpiPrims — без tlsrec: превью/картинки (ggpht/ytimg) на SOCKS
-// часто рвутся от -r-5+se+OOB; видео (googlevideo QUIC + udp-fake) не трогаем.
-func softByedpiPrims(opts desyncOpts) []Primitive {
+// cloudflareSoftPrims — CF anycast/ECH: tlsrec+OOB путают CF middlebox → RST;
+// чистый passthrough часто не обходит DPI. Мягкий split без OOB/tlsrec.
+func cloudflareSoftPrims(opts desyncOpts) []Primitive {
 	pos := opts.SplitPos
 	if pos == 0 {
 		pos = 1
 	}
-	oob := opts.OOBChar
-	if oob == 0 {
-		oob = 'a'
-	}
-	switch strings.ToLower(strings.TrimSpace(opts.Method)) {
-	case "split":
-		return []Primitive{{Kind: "split", Positions: []int{pos}}}
-	case "disorder":
-		return []Primitive{{Kind: "disorder", Positions: []int{pos}}}
-	case "disoob":
-		return []Primitive{{Kind: "disoob", Positions: []int{pos}, OOBChar: oob}}
-	case "fake":
-		return []Primitive{
-			{Kind: "fake", FakeTTL: 8, FakeRepeats: 1, FakeSize: 1200},
-			{Kind: "split", Positions: []int{pos}},
-		}
-	case "multisplit":
-		return []Primitive{{Kind: "multisplit", Positions: []int{pos}, SplitSNI: true, Parts: 2}}
-	default: // oob без tlsrec
-		return []Primitive{{Kind: "oob", Positions: []int{pos}, OOBChar: oob}}
-	}
+	return []Primitive{{Kind: "split", Positions: []int{pos}}}
 }
 
 // selectRule — первое подходящее правило с учётом hostsMode (ByeByeDPI).
-// dialIP — IP после LookupHost (для CF anycast без «cloudflare» в SNI).
+// dialIP — IP после Dial/LookupHost (для CF anycast без «cloudflare» в SNI).
 func selectRule(p Preset, host string, port uint16, lists hostLists, payload []byte, opts desyncOpts, dialIP string) (Rule, bool) {
 	if !hostsModeGate(opts.HostsMode, host, lists) {
 		return Rule{Name: "hosts-gate-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
 
-	// Cloudflare anycast/ECH: tlsrec+OOB на SOCKS → RST (~70–130ms). Пасsthrough.
-	if isCloudflareTarget(host, dialIP) {
-		return Rule{Name: "cloudflare-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+	// Cloudflare: не tlsrec/OOB (RST), не голый passthrough (DPI) — только split.
+	if p.Name != "passthrough" && isCloudflareTarget(host, dialIP) && portOK(port, defaultPorts()) {
+		return Rule{Name: "cloudflare-soft-split", Prims: cloudflareSoftPrims(opts)}, true
 	}
 
 	if !protocolOK(opts, payload) && p.Name != "passthrough" {
@@ -223,13 +203,10 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		}
 	}
 
-	// Превью/аватарки (ggpht, ytimg): soft OOB без tlsrec — полный DEFAULT даёт timeout/0B.
+	// Превью/аватарки (ggpht, ytimg): полный DEFAULT и soft-OOB дают 0B — без desync.
+	// Видео (googlevideo QUIC + udp-fake) не трогаем.
 	if p.Name != "passthrough" && isYoutubeImageHost(host) && portOK(port, defaultPorts()) {
-		method := strings.ToLower(strings.TrimSpace(opts.Method))
-		if method == "" {
-			method = "oob"
-		}
-		return Rule{Name: "byedpi-soft-" + method, Prims: softByedpiPrims(opts)}, true
+		return Rule{Name: "youtube-image-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
 
 	// ByeByeDPI-путь (auto/byedpi): method из настроек (oob/fake/…), не Flowseal multisplit.

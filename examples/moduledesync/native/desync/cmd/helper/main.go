@@ -165,9 +165,9 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		emitStatus(statusFatal, "write ready marker failed")
 		log.Fatalf("write ready marker: %v", err)
 	}
-	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d preset=%s method=%s hostsMode=%s udpFake=%d filter=%d auto=%v protect=%s",
+	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d ver=1.2.5 preset=%s method=%s hostsMode=%s udpFake=%d filter=%d auto=%v protect=%s",
 		actualPort, dl.Preset, opts.Method, opts.HostsMode, opts.UdpFakeCount, len(lists.filter), dl.Auto, protectPath)
-	emitLog("preset=%s method=%s hostsMode=%s udpFake=%d filterHosts=%d builtin=%s",
+	emitLog("ver=1.2.5 preset=%s method=%s hostsMode=%s udpFake=%d filterHosts=%d builtin=%s",
 		dl.Preset, opts.Method, opts.HostsMode, opts.UdpFakeCount, len(lists.filter), builtinCSV)
 
 	sess := &session{
@@ -243,7 +243,8 @@ func (sess *session) currentOverridePrims() []Primitive {
 
 func shouldApplySearchOverride(rule Rule) bool {
 	switch rule.Name {
-	case "hosts-gate-passthrough", "proto-passthrough", "exclude-passthrough", "port-passthrough", "no-match-passthrough", "cloudflare-passthrough":
+	case "hosts-gate-passthrough", "proto-passthrough", "exclude-passthrough", "port-passthrough", "no-match-passthrough",
+		"cloudflare-passthrough", "cloudflare-soft-split", "youtube-image-passthrough":
 		return false
 	}
 	if strings.HasPrefix(rule.Name, "byedpi-soft-") {
@@ -336,8 +337,11 @@ func handleConn(c net.Conn, sess *session) {
 	presetName := sess.preset
 	matchHost := matchHostFromPayload(host, payload)
 	curOpts := sess.currentOpts()
+	// IP после реального Dial (надёжнее LookupHost[0] / hostname).
 	dialIP := ""
-	if req.IsIP() {
+	if ta, ok := up.RemoteAddr().(*net.TCPAddr); ok && ta.IP != nil {
+		dialIP = ta.IP.String()
+	} else if req.IsIP() {
 		dialIP = host
 	} else if h, _, err := net.SplitHostPort(dialTarget); err == nil && net.ParseIP(h) != nil {
 		dialIP = h

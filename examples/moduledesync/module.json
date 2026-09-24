@@ -4,10 +4,10 @@
     "desync"
   ],
   "name": "Desync",
-  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: DEFAULT = tlsrec+OOB+UDP fake (-o1 -a1 -r-5+se); CF passthrough; soft OOB для превью YouTube.",
+  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: DEFAULT = tlsrec+OOB+UDP fake; CF soft-split (без tlsrec/OOB); превью YouTube без desync.",
   "homepage": "https://github.com/MaksBaks92/desync-antinet-module",
   "updateUrl": "https://raw.githubusercontent.com/MaksBaks92/desync-antinet-module/main/antinet-module.json",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "license": "MIT",
   "handoverMode": "signal",
   "hostEvents": ["handover", "netlost", "netback", "stall", "dns"],
