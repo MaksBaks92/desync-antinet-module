@@ -246,14 +246,11 @@ func (hl hostLists) classify(host string) matchBucket {
 }
 
 // hostsModeGate — аналог ByeByeDPI HostsMode.
-// all: как Disable — desync на всё подходящее по протоколу.
+// all: как Disable — desync на всё подходящее по протоколу (без Flowseal-exclude).
 // whitelist: только host из filter.
 // blacklist: всё, кроме filter.
 func hostsModeGate(mode, host string, lists hostLists) bool {
 	mode = strings.ToLower(strings.TrimSpace(mode))
-	if lists.excluded(host) {
-		return false
-	}
 	switch mode {
 	case "whitelist":
 		return lists.inFilter(host)

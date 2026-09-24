@@ -55,7 +55,7 @@ func presetGeneral() Preset {
 				// Аналог ipset-all / filter без hostlist: после SNI-матча и list-матча.
 				Name:    "any-tls-http",
 				Buckets: []matchBucket{bucketAll},
-				Ports:   []uint16{80, 443, 2053, 2083, 2087, 2096, 8443},
+				Ports:   defaultPorts(),
 				Prims: []Primitive{
 					{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
 				},

@@ -69,7 +69,8 @@ func getPreset(name string) Preset {
 }
 
 func defaultPorts() []uint16 {
-	return []uint16{80, 443, 2053, 2083, 2087, 2096, 8443}
+	// 80/443 + типичные TLS-порты приложений (Google mtalk 5228, Discord media, …).
+	return []uint16{80, 443, 2053, 2083, 2087, 2096, 5222, 5228, 8443}
 }
 
 func portOK(port uint16, ports []uint16) bool {
@@ -167,24 +168,27 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		return Rule{Name: "hosts-gate-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
 	if !protocolOK(opts, payload) && p.Name != "passthrough" {
-		// Узкие пресеты youtube/discord всё ещё могут матчить по bucket без TLS-сигнатуры.
 		if p.Name != "youtube" && p.Name != "discord" {
 			return Rule{Name: "proto-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 		}
 	}
 
-	if p.Name == "byedpi" {
+	// ByeByeDPI-путь (auto/byedpi): method из настроек (oob/fake/…), не Flowseal multisplit.
+	if useByeDPIMethod(p.Name, opts) {
 		if !portOK(port, defaultPorts()) {
 			return Rule{Name: "port-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 		}
-		return Rule{Name: "byedpi-" + strings.ToLower(opts.Method), Prims: byedpiPrims(opts)}, true
+		method := strings.ToLower(strings.TrimSpace(opts.Method))
+		if method == "" {
+			method = "oob"
+		}
+		return Rule{Name: "byedpi-" + method, Prims: byedpiPrims(opts)}, true
 	}
 
 	b := lists.classify(host)
 	if b == bucketExclude {
 		return Rule{Name: "exclude-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
-	// hostsMode=all: предпочитаем bucketAll-правила (как ByeByeDPI Disable).
 	if strings.ToLower(opts.HostsMode) == "all" || opts.HostsMode == "" {
 		for _, r := range p.Rules {
 			if !portOK(port, r.Ports) {
@@ -212,6 +216,17 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		}
 	}
 	return Rule{Name: "no-match-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+}
+
+// useByeDPIMethod — применять SETTING_method (oob/fake/…) вместо Flowseal-цепочек.
+// Пресеты auto/byedpi = путь ByeByeDPI; general/alt/… остаются Flowseal (с exclude через classify).
+func useByeDPIMethod(preset string, _ desyncOpts) bool {
+	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case "byedpi", "auto":
+		return true
+	default:
+		return false
+	}
 }
 
 func fallbackPrims(preset string) []Primitive {

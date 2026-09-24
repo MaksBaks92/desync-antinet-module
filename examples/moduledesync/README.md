@@ -44,8 +44,9 @@ AntiNet гонит трафик в helper → protect-dial → на **перво
 
 | Ссылка | Смысл |
 |---|---|
-| `desync://byedpi` | дефолт ByeByeDPI |
-| `desync://general` | Flowseal-like multisplit |
+| `desync://byedpi` | дефолт ByeByeDPI (method из настроек) |
+| `desync://auto` | то же, что byedpi: method (oob/fake/…) на весь TLS/HTTP |
+| `desync://general` | Flowseal-like multisplit (+ exclude-лист) |
 | `desync://alt#Домашний` | alt, имя «Домашний» |
 | `desync://passthrough` | без desync |
 
