@@ -1,0 +1,69 @@
+name: Release module bundles
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: examples/moduledesync/native/desync/go.mod
+          cache-dependency-path: examples/moduledesync/native/desync/go.sum
+
+      - name: Android NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27d
+
+      - name: Build Android + desktop helpers
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          python build.py --module desync --os android --abis all -y
+          python build.py --module desync --os linux --arch amd64 -y
+          python build.py --module desync --os linux --arch arm64 -y
+          python build.py --module desync --os windows --arch amd64 -y
+          python build.py --bundle --module desync
+
+      - name: Upload dist-release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desync-dist-release
+          path: examples/moduledesync/dist-release/
+          if-no-files-found: error
+
+      - name: Upload raw dist tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: desync-dist
+          path: examples/moduledesync/dist/
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          body: |
+            AntiNet desync module bundles (Android + desktop).
+            Install a platform zip into AntiNet `modules/desync/`.
+            Links: `desync://general`, `desync://alt`, `desync://youtube`, …
+          files: |
+            examples/moduledesync/dist-release/*.zip
+            examples/moduledesync/dist-release/antinet-module.json

@@ -19,11 +19,15 @@
 
 ## Установка в AntiNet
 
-1. Соберите модуль: `python build.py --module desync --os windows` (или `android`).
-2. Скопируйте содержимое `examples/moduledesync/dist/desktop/<os>_<arch>/` (или `dist/android/<abi>/`)
-   в каталог модулей AntiNet: Desktop — `<exe>/modules/desync/`, Android — `filesDir/modules/desync/`.
-3. Добавьте конфиг со ссылкой, например `desync://general` или `desync://alt#YouTube`.
-4. В карточке модуля можно выбрать пресет (`general` / `alt` / …) и флаг auto.
+**Сборка только в GitHub Actions** (локально артефакты не выпускаются). Берите готовые zip:
+
+1. [Actions](https://github.com/MaksBaks92/desync-antinet-module/actions) → последний успешный
+   `Release module bundles` → Artifacts `desync-dist-release`, **или**
+   [Releases](https://github.com/MaksBaks92/desync-antinet-module/releases) по тегу `v*`.
+2. Распакуйте нужный zip в каталог модулей AntiNet:
+   Desktop — `<exe>/modules/desync/`, Android — `filesDir/modules/desync/`.
+3. Добавьте конфиг, например `desync://general` или `desync://alt#YouTube`.
+4. В карточке модуля можно выбрать пресет и флаг auto.
 
 ## Как работает
 
@@ -44,14 +48,14 @@ IP не скрывается, своего шифрования нет — то�
 полноценный fake-inject как у winws **недоступны**. Они логируются как `unsupported`.
 UDP ASSOCIATE в MVP — passthrough без QUIC/Discord UDP-fake.
 
-## Сборка
+## Сборка (CI)
 
-```
-python build.py --doctor --module desync --os all
-python build.py --module desync --os windows
-python build.py --module desync --os android --abis arm64-v8a
-python build.py --module desync --os all
-```
+Workflow: `.github/workflows/release.yml`
+
+- push в `main` / `workflow_dispatch` → артефакты Actions
+- тег `v*` → GitHub Release с zip + `antinet-module.json`
+
+Локальный `build.py` — только для разработки; дистрибутив пользователям — с GitHub.
 
 ## Лицензия
 
