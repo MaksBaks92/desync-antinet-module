@@ -2,3 +2,12 @@ cloudflare.net
 cloudflare.com
 cloudflarecn.net
 cloudflare-ech.com
+pages.dev
+workers.dev
+r2.dev
+trycloudflare.com
+cfargotunnel.com
+cloudflareinsights.com
+cloudflarestream.com
+cloudflareclient.com
+cloudflare-dns.com

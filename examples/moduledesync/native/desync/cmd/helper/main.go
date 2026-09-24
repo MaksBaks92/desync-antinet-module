@@ -243,7 +243,10 @@ func (sess *session) currentOverridePrims() []Primitive {
 
 func shouldApplySearchOverride(rule Rule) bool {
 	switch rule.Name {
-	case "hosts-gate-passthrough", "proto-passthrough", "exclude-passthrough", "port-passthrough", "no-match-passthrough":
+	case "hosts-gate-passthrough", "proto-passthrough", "exclude-passthrough", "port-passthrough", "no-match-passthrough", "cloudflare-passthrough":
+		return false
+	}
+	if strings.HasPrefix(rule.Name, "byedpi-soft-") {
 		return false
 	}
 	if len(rule.Prims) == 1 && rule.Prims[0].Kind == "passthrough" {
@@ -333,12 +336,18 @@ func handleConn(c net.Conn, sess *session) {
 	presetName := sess.preset
 	matchHost := matchHostFromPayload(host, payload)
 	curOpts := sess.currentOpts()
-	rule, preset, _ := selectRuleForPreset(presetName, matchHost, req.Port, sess.lists, payload, curOpts)
+	dialIP := ""
+	if req.IsIP() {
+		dialIP = host
+	} else if h, _, err := net.SplitHostPort(dialTarget); err == nil && net.ParseIP(h) != nil {
+		dialIP = h
+	}
+	rule, preset, _ := selectRuleForPreset(presetName, matchHost, req.Port, sess.lists, payload, curOpts, dialIP)
 	if ov := sess.currentOverridePrims(); len(ov) > 0 && shouldApplySearchOverride(rule) {
 		rule = Rule{Name: "search-override", Prims: ov}
 	}
-	log.Printf("desync apply preset=%s rule=%s socks=%s match=%s:%d payload=%d tls=%v hostsMode=%s",
-		preset.Name, rule.Name, host, matchHost, req.Port, len(payload), looksLikeTLSClientHello(payload), curOpts.HostsMode)
+	log.Printf("desync apply preset=%s rule=%s socks=%s match=%s:%d dialIP=%s payload=%d tls=%v hostsMode=%s",
+		preset.Name, rule.Name, host, matchHost, req.Port, dialIP, len(payload), looksLikeTLSClientHello(payload), curOpts.HostsMode)
 
 	if err := applyPrimitives(up, matchHost, rule, payload); err != nil {
 		log.Printf("desync apply failed host=%s match=%s rule=%s err=%v", host, matchHost, rule.Name, err)

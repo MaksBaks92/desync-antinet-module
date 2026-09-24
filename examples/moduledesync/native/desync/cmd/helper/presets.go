@@ -237,11 +237,11 @@ func presetPassthrough() Preset {
 	}
 }
 
-func selectRuleForPreset(name string, host string, port uint16, lists hostLists, payload []byte, opts desyncOpts) (Rule, Preset, bool) {
+func selectRuleForPreset(name string, host string, port uint16, lists hostLists, payload []byte, opts desyncOpts, dialIP string) (Rule, Preset, bool) {
 	p := getPreset(name)
 	if p.Name == "passthrough" {
 		return p.Rules[0], p, true
 	}
-	r, ok := selectRule(p, host, port, lists, payload, opts)
+	r, ok := selectRule(p, host, port, lists, payload, opts, dialIP)
 	return r, p, ok
 }

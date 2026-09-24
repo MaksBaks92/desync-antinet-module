@@ -175,15 +175,61 @@ func byedpiPrims(opts desyncOpts) []Primitive {
 	}
 }
 
+// softByedpiPrims — без tlsrec: превью/картинки (ggpht/ytimg) на SOCKS
+// часто рвутся от -r-5+se+OOB; видео (googlevideo QUIC + udp-fake) не трогаем.
+func softByedpiPrims(opts desyncOpts) []Primitive {
+	pos := opts.SplitPos
+	if pos == 0 {
+		pos = 1
+	}
+	oob := opts.OOBChar
+	if oob == 0 {
+		oob = 'a'
+	}
+	switch strings.ToLower(strings.TrimSpace(opts.Method)) {
+	case "split":
+		return []Primitive{{Kind: "split", Positions: []int{pos}}}
+	case "disorder":
+		return []Primitive{{Kind: "disorder", Positions: []int{pos}}}
+	case "disoob":
+		return []Primitive{{Kind: "disoob", Positions: []int{pos}, OOBChar: oob}}
+	case "fake":
+		return []Primitive{
+			{Kind: "fake", FakeTTL: 8, FakeRepeats: 1, FakeSize: 1200},
+			{Kind: "split", Positions: []int{pos}},
+		}
+	case "multisplit":
+		return []Primitive{{Kind: "multisplit", Positions: []int{pos}, SplitSNI: true, Parts: 2}}
+	default: // oob без tlsrec
+		return []Primitive{{Kind: "oob", Positions: []int{pos}, OOBChar: oob}}
+	}
+}
+
 // selectRule — первое подходящее правило с учётом hostsMode (ByeByeDPI).
-func selectRule(p Preset, host string, port uint16, lists hostLists, payload []byte, opts desyncOpts) (Rule, bool) {
+// dialIP — IP после LookupHost (для CF anycast без «cloudflare» в SNI).
+func selectRule(p Preset, host string, port uint16, lists hostLists, payload []byte, opts desyncOpts, dialIP string) (Rule, bool) {
 	if !hostsModeGate(opts.HostsMode, host, lists) {
 		return Rule{Name: "hosts-gate-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
+
+	// Cloudflare anycast/ECH: tlsrec+OOB на SOCKS → RST (~70–130ms). Пасsthrough.
+	if isCloudflareTarget(host, dialIP) {
+		return Rule{Name: "cloudflare-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+	}
+
 	if !protocolOK(opts, payload) && p.Name != "passthrough" {
 		if p.Name != "youtube" && p.Name != "discord" {
 			return Rule{Name: "proto-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 		}
+	}
+
+	// Превью/аватарки (ggpht, ytimg): soft OOB без tlsrec — полный DEFAULT даёт timeout/0B.
+	if p.Name != "passthrough" && isYoutubeImageHost(host) && portOK(port, defaultPorts()) {
+		method := strings.ToLower(strings.TrimSpace(opts.Method))
+		if method == "" {
+			method = "oob"
+		}
+		return Rule{Name: "byedpi-soft-" + method, Prims: softByedpiPrims(opts)}, true
 	}
 
 	// ByeByeDPI-путь (auto/byedpi): method из настроек (oob/fake/…), не Flowseal multisplit.
