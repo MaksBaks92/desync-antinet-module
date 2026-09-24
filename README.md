@@ -45,7 +45,7 @@ IP не скрывается, своего шифрования нет — то�
 
 Нет packet-path (WinDivert / NFQUEUE): **seqovl**, **fooling=ts**, IP-frag, правка SYN и
 полноценный fake-inject как у winws **недоступны**. Они логируются как `unsupported`.
-UDP ASSOCIATE в MVP — passthrough без QUIC/Discord UDP-fake.
+UDP ASSOCIATE — ByeByeDPI `-a1` UDP fake перед первым датаграммом (QUIC YouTube/Discord).
 
 ## Сборка (CI)
 

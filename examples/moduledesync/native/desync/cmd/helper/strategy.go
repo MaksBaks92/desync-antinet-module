@@ -116,16 +116,20 @@ type desyncOpts struct {
 	OOBChar      byte
 	DesyncHTTPS  bool
 	DesyncHTTP   bool
+	UdpFakeCount int // ByeByeDPI -aN; 0 = off (DEFAULT_CMD_ARGS -a1)
+	FakeTTL      int // TTL для TCP/UDP fake; byeDPI DEFAULT_TTL=8
 }
 
 func defaultDesyncOpts() desyncOpts {
 	return desyncOpts{
-		HostsMode:   "all",
-		Method:      "oob",
-		SplitPos:    1,
-		OOBChar:     'a',
-		DesyncHTTPS: true,
-		DesyncHTTP:  true,
+		HostsMode:    "all",
+		Method:       "oob",
+		SplitPos:     1,
+		OOBChar:      'a',
+		DesyncHTTPS:  true,
+		DesyncHTTP:   true,
+		UdpFakeCount: 1,
+		FakeTTL:      8,
 	}
 }
 
@@ -163,7 +167,7 @@ func byedpiPrims(opts desyncOpts) []Primitive {
 	case "multisplit":
 		return []Primitive{{Kind: "multisplit", Positions: []int{pos}, SplitSNI: true, Parts: 2}}
 	default: // oob — ByeByeDPI DEFAULT_CMD_ARGS "-o1 -a1 -r-5+se"
-		// tlsrec сначала (tamp буфера), затем OOB@pos. UDP -a1 — отдельный UDPASSOC path.
+		// tlsrec сначала (tamp буфера), затем OOB@pos. UDP -a1 — udpDesyncConn на UDPASSOC.
 		return []Primitive{
 			{Kind: "tlsrec", TlsRecAt: -5, TlsRecSNI: true, TlsRecEnd: true},
 			{Kind: "oob", Positions: []int{pos}, OOBChar: oob},

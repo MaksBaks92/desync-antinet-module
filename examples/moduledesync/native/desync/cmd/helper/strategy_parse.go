@@ -61,6 +61,8 @@ func parseByeDPICmd(cmd string) (searchStrategy, bool) {
 	splitPos := 1
 	fakeTTL := 8
 	oob := byte('a')
+	udpFake := 1
+	udpFakeSet := false
 
 	addPrim := func(p Primitive) {
 		if len(prims) >= 4 {
@@ -71,6 +73,28 @@ func parseByeDPICmd(cmd string) (searchStrategy, bool) {
 
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
+
+		// -a1 / -a2 — UDP fake count (не TCP-примитив).
+		if len(t) >= 2 && t[0] == '-' && t[1] == 'a' {
+			rest := t[2:]
+			if rest == "" && i+1 < len(toks) {
+				rest = toks[i+1]
+				i++
+			}
+			if v, err := strconv.Atoi(rest); err == nil && v >= 0 {
+				udpFake = v
+				udpFakeSet = true
+			}
+			continue
+		}
+		if strings.EqualFold(t, "--udp-fake") && i+1 < len(toks) {
+			if v, err := strconv.Atoi(toks[i+1]); err == nil && v >= 0 {
+				udpFake = v
+				udpFakeSet = true
+			}
+			i++
+			continue
+		}
 
 		// long options: --fake -1 --ttl 8 --split 1+s --disorder 3+s
 		if reLongFake.MatchString(t) {
@@ -180,10 +204,17 @@ func parseByeDPICmd(cmd string) (searchStrategy, bool) {
 	opts.Method = method
 	opts.SplitPos = splitPos
 	opts.OOBChar = oob
+	if udpFakeSet {
+		opts.UdpFakeCount = udpFake
+	}
+	opts.FakeTTL = fakeTTL
 
 	label := method + "@" + strconv.Itoa(splitPos)
 	if len(prims) > 1 {
 		label += "+" + strconv.Itoa(len(prims)) + "p"
+	}
+	if udpFakeSet && udpFake > 0 {
+		label += "+a" + strconv.Itoa(udpFake)
 	}
 
 	return searchStrategy{

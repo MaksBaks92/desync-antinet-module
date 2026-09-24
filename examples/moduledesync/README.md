@@ -53,7 +53,7 @@ AntiNet гонит трафик в helper → protect-dial → на **перво
 ## Ограничения
 
 На SOCKS-пути нет WinDivert/NFQUEUE: seqovl, fooling=ts, SYN-правки недоступны.
-UDP ASSOCIATE — passthrough (без QUIC fake). OOB на Windows откатывается к split.
+UDP ASSOCIATE — ByeByeDPI `-a1` UDP fake (64 нуля @ TTL 8) перед первым датаграммом; нужно для QUIC YouTube app. OOB на Windows откатывается к split.
 
 ## Сборка
 

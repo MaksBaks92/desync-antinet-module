@@ -335,6 +335,12 @@ func applySearchBest(sess *session, best searchStrategy) {
 	if best.Opts.OOBChar != 0 {
 		sess.opts.OOBChar = best.Opts.OOBChar
 	}
+	if best.Opts.UdpFakeCount >= 0 {
+		sess.opts.UdpFakeCount = best.Opts.UdpFakeCount
+	}
+	if best.Opts.FakeTTL > 0 {
+		sess.opts.FakeTTL = best.Opts.FakeTTL
+	}
 	// Подбор имеет смысл в byedpi-режиме.
 	if sess.preset == "byedpi" || sess.preset == "" {
 		sess.preset = "byedpi"
@@ -342,8 +348,8 @@ func applySearchBest(sess *session, best searchStrategy) {
 	sess.optsMu.Unlock()
 	prims := append([]Primitive{}, best.Prims...)
 	sess.overridePrims.Store(prims)
-	log.Printf("desync: applied best strategy label=%s method=%s pos=%d prims=%d",
-		best.Label, best.Opts.Method, best.Opts.SplitPos, len(prims))
+	log.Printf("desync: applied best strategy label=%s method=%s pos=%d udpFake=%d prims=%d",
+		best.Label, best.Opts.Method, best.Opts.SplitPos, best.Opts.UdpFakeCount, len(prims))
 }
 
 // pickStrategyChoice — опциональный choice с топ-стратегиями (как «применить» в ByeByeDPI).

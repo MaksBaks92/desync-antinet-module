@@ -66,6 +66,12 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 	if v, ok := cfg["SETTING_desyncHttp"]; ok {
 		opts.DesyncHTTP = v == "true" || v == "1"
 	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_udpFakeCount"])); err == nil && v >= 0 {
+		opts.UdpFakeCount = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_fakeTTL"])); err == nil && v > 0 {
+		opts.FakeTTL = v
+	}
 
 	dl, ok := parseDesyncLink(link)
 	if !ok {
@@ -159,10 +165,10 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		emitStatus(statusFatal, "write ready marker failed")
 		log.Fatalf("write ready marker: %v", err)
 	}
-	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d preset=%s method=%s hostsMode=%s filter=%d auto=%v protect=%s",
-		actualPort, dl.Preset, opts.Method, opts.HostsMode, len(lists.filter), dl.Auto, protectPath)
-	emitLog("preset=%s method=%s hostsMode=%s filterHosts=%d builtin=%s",
-		dl.Preset, opts.Method, opts.HostsMode, len(lists.filter), builtinCSV)
+	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d preset=%s method=%s hostsMode=%s udpFake=%d filter=%d auto=%v protect=%s",
+		actualPort, dl.Preset, opts.Method, opts.HostsMode, opts.UdpFakeCount, len(lists.filter), dl.Auto, protectPath)
+	emitLog("preset=%s method=%s hostsMode=%s udpFake=%d filterHosts=%d builtin=%s",
+		dl.Preset, opts.Method, opts.HostsMode, opts.UdpFakeCount, len(lists.filter), builtinCSV)
 
 	sess := &session{
 		user:        user,
@@ -255,10 +261,21 @@ func handleConn(c net.Conn, sess *session) {
 		return
 	}
 	if req.Cmd == socksCmdUDPAssociate {
-		// MVP: UDP ASSOCIATE — passthrough (без QUIC/Discord UDP-fake).
+		// ByeByeDPI -aN: UDP fake перед первым датаграммом (QUIC YouTube app / Discord).
+		cur := sess.currentOpts()
+		fakeCount := cur.UdpFakeCount
+		if sess.preset == "passthrough" {
+			fakeCount = 0
+		}
+		fakeTTL := cur.FakeTTL
+		if fakeTTL <= 0 {
+			fakeTTL = 8
+		}
 		serveSocksUDPAssociate(c, br, desyncUDPTransport{
 			resolver:    sess.resolver,
 			protectPath: sess.protectPath,
+			fakeCount:   fakeCount,
+			fakeTTL:     fakeTTL,
 		})
 		return
 	}
@@ -340,6 +357,8 @@ func handleConn(c net.Conn, sess *session) {
 type desyncUDPTransport struct {
 	resolver    *protectedResolver
 	protectPath string
+	fakeCount   int
+	fakeTTL     int
 }
 
 func (t desyncUDPTransport) LookupHost(host string) ([]string, error) {
@@ -354,7 +373,7 @@ func (t desyncUDPTransport) DialUDPTarget(dst netip.AddrPort) (net.Conn, error) 
 		return nil, fmt.Errorf("protectElapsed=%.3fms protectTries=%d protectErr=%q: %w",
 			pst.elapsedMs, pst.attempts, pst.firstErr, err)
 	}
-	return nc, nil
+	return wrapUDPDesync(nc, t.fakeCount, t.fakeTTL, dst.String()), nil
 }
 
 type uiStrings struct {

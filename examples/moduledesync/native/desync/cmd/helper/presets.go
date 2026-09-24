@@ -174,7 +174,7 @@ func presetYoutube() Preset {
 func presetDiscord() Preset {
 	return Preset{
 		Name:        "discord",
-		Description: "Узкий профиль: discord hostlist, fake+multisplit (UDP fake — MVP passthrough)",
+		Description: "Узкий профиль: discord hostlist, fake+multisplit (+ UDP fake для voice)",
 		Rules: []Rule{
 			{
 				Name:    "discord",

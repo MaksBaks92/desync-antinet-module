@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/ipv4"
@@ -37,6 +38,72 @@ func setConnTTL(c net.Conn, ttl int) error {
 func resetConnTTL(c net.Conn) {
 	// Best-effort restore to a normal hop limit.
 	_ = setConnTTL(c, 64)
+}
+
+func setUDPConnTTL(c net.Conn, ttl int) error {
+	if ttl <= 0 {
+		return fmt.Errorf("ttl disabled")
+	}
+	uc, ok := c.(*net.UDPConn)
+	if !ok {
+		return fmt.Errorf("not *net.UDPConn")
+	}
+	if err := ipv4.NewConn(uc).SetTTL(ttl); err == nil {
+		return nil
+	}
+	return ipv6.NewConn(uc).SetHopLimit(ttl)
+}
+
+func resetUDPConnTTL(c net.Conn) {
+	_ = setUDPConnTTL(c, 64)
+}
+
+// byeDPI udp_data — 64 нулевых байта (packets.c).
+const udpFakeSize = 64
+
+// udpDesyncConn — ByeByeDPI desync_udp (-aN): перед первым реальным датаграммом
+// шлёт N нулевых fake @ TTL (DEFAULT_TTL=8), затем восстанавливает TTL.
+type udpDesyncConn struct {
+	net.Conn
+	fakeCount int
+	fakeTTL   int
+	dstLabel  string
+	once      sync.Once
+	fakeErr   error
+}
+
+func wrapUDPDesync(c net.Conn, count, ttl int, dst string) net.Conn {
+	if c == nil || count <= 0 {
+		return c
+	}
+	if ttl <= 0 {
+		ttl = 8
+	}
+	return &udpDesyncConn{Conn: c, fakeCount: count, fakeTTL: ttl, dstLabel: dst}
+}
+
+func (c *udpDesyncConn) Write(b []byte) (int, error) {
+	c.once.Do(func() {
+		if err := setUDPConnTTL(c.Conn, c.fakeTTL); err != nil {
+			log.Printf("desync udp-fake dst=%s SKIP ttl-set-failed err=%v", c.dstLabel, err)
+			return
+		}
+		fake := make([]byte, udpFakeSize)
+		for i := 0; i < c.fakeCount; i++ {
+			if _, err := c.Conn.Write(fake); err != nil {
+				c.fakeErr = err
+				resetUDPConnTTL(c.Conn)
+				log.Printf("desync udp-fake dst=%s write-failed i=%d err=%v", c.dstLabel, i, err)
+				return
+			}
+		}
+		resetUDPConnTTL(c.Conn)
+		log.Printf("desync udp-fake dst=%s count=%d ttl=%d", c.dstLabel, c.fakeCount, c.fakeTTL)
+	})
+	if c.fakeErr != nil {
+		return 0, c.fakeErr
+	}
+	return c.Conn.Write(b)
 }
 
 // findSNIOffset — смещение TLS extension server_name; -1 если нет.
