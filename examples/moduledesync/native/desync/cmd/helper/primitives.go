@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 	"log"
@@ -106,14 +107,197 @@ func (c *udpDesyncConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b)
 }
 
-// findSNIOffset — середина hostname в SNI (zapret midsld-lite); -1 если нет.
-// Раньше возвращали sniExtStart — split до имени; для CF/hostfakesplit нужен разрез внутри host.
+// sameLenHost — host той же длины, что и оригинал (иначе stream сломается без seqovl).
+func sameLenHost(template string, n int) []byte {
+	if n <= 0 {
+		return nil
+	}
+	t := []byte(template)
+	out := make([]byte, n)
+	if len(t) >= n {
+		copy(out, t[:n])
+		return out
+	}
+	copy(out, t)
+	for i := len(t); i < n; i++ {
+		out[i] = 'x'
+	}
+	// сохраняем точку ближе к концу, если шаблон короче (похоже на FQDN)
+	if n > 3 && !bytes.Contains(out, []byte{'.'}) {
+		out[n-3] = '.'
+	}
+	return out
+}
+
+// writeHostFakeSplit — zapret2 hostfakesplit на SOCKS Write():
+// before | fakeHost@TTL | realHost(+mid) | fakeHost@TTL | after
+// Без md5sig/ts/seqovl fooling = только TTL (fake должен умереть до сервера).
+// Если TTL недоступен — не шлём fake host (иначе ломаем TLS).
+func writeHostFakeSplit(c net.Conn, payload []byte, fakeHost string, ttl int, midhost bool) error {
+	_, _, hostPos, hostLen, _ := parseTLSClientHelloSNI(payload)
+	if hostPos < 0 || hostLen < 1 || hostPos+hostLen > len(payload) {
+		return writeMultiDisorder(c, payload, resolveSplitPos(payload, []int{1}, true))
+	}
+	if fakeHost == "" {
+		fakeHost = "www.google.com"
+	}
+	fh := sameLenHost(fakeHost, hostLen)
+	before := payload[:hostPos]
+	realHost := payload[hostPos : hostPos+hostLen]
+	after := payload[hostPos+hostLen:]
+
+	if _, err := c.Write(before); err != nil {
+		return err
+	}
+
+	ttlOK := ttl > 0 && setConnTTL(c, ttl) == nil
+	writeFake := func() error {
+		if !ttlOK {
+			return nil
+		}
+		_, err := c.Write(fh)
+		return err
+	}
+	if err := writeFake(); err != nil {
+		resetConnTTL(c)
+		return err
+	}
+	if ttlOK {
+		resetConnTTL(c)
+	}
+
+	// real host, optionally midhost=midsld
+	if midhost {
+		mAbs := findMidSLD(payload)
+		m := mAbs - hostPos
+		if m > 0 && m < hostLen {
+			if _, err := c.Write(realHost[:m]); err != nil {
+				return err
+			}
+			time.Sleep(1 * time.Millisecond)
+			if _, err := c.Write(realHost[m:]); err != nil {
+				return err
+			}
+		} else if _, err := c.Write(realHost); err != nil {
+			return err
+		}
+	} else if _, err := c.Write(realHost); err != nil {
+		return err
+	}
+
+	if ttlOK {
+		_ = setConnTTL(c, ttl)
+	}
+	if err := writeFake(); err != nil {
+		if ttlOK {
+			resetConnTTL(c)
+		}
+		return err
+	}
+	if ttlOK {
+		resetConnTTL(c)
+	}
+
+	if _, err := c.Write(after); err != nil {
+		return err
+	}
+	return nil
+}
+
+// findSNIOffset — середина всего hostname в SNI; -1 если нет.
 func findSNIOffset(b []byte) int {
 	_, _, hostPos, hostLen, _ := parseTLSClientHelloSNI(b)
 	if hostPos < 0 || hostLen < 2 {
 		return -1
 	}
 	return hostPos + hostLen/2
+}
+
+// findMidSLD — zapret marker midsld: середина second-level domain внутри SNI hostname.
+// Пример: www.googlevideo.com → разрез внутри «googlevideo» (не середина всей строки).
+func findMidSLD(b []byte) int {
+	name, _, hostPos, hostLen, _ := parseTLSClientHelloSNI(b)
+	if hostPos < 0 || hostLen < 2 || name == "" {
+		return -1
+	}
+	host := name
+	// labels справа: tld, sld, …
+	dot := strings.LastIndexByte(host, '.')
+	if dot <= 0 {
+		return hostPos + hostLen/2
+	}
+	rest := host[:dot] // без TLD
+	dot2 := strings.LastIndexByte(rest, '.')
+	sldStart := 0
+	if dot2 >= 0 {
+		sldStart = dot2 + 1
+	}
+	sldLen := len(rest) - sldStart
+	if sldLen < 2 {
+		return hostPos + hostLen/2
+	}
+	return hostPos + sldStart + sldLen/2
+}
+
+// resolveSplitPos — Positions + опционально midsld (SplitSNI) как у zapret split-pos=1,midsld.
+func resolveSplitPos(payload []byte, positions []int, splitSNI bool) []int {
+	pos := append([]int{}, positions...)
+	if splitSNI {
+		if m := findMidSLD(payload); m > 0 {
+			pos = append(pos, m)
+		} else if m := findSNIOffset(payload); m > 0 {
+			pos = append(pos, m)
+		}
+	}
+	return pos
+}
+
+// writeMultiDisorder — zapret multidisorder: сегменты в обратном порядке по cuts.
+func writeMultiDisorder(c net.Conn, payload []byte, positions []int) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	if len(positions) == 0 {
+		return writeDisorder(c, payload, 1)
+	}
+	cuts := make([]int, 0, len(positions)+2)
+	cuts = append(cuts, 0)
+	for _, p := range positions {
+		if p > 0 && p < len(payload) {
+			cuts = append(cuts, p)
+		}
+	}
+	cuts = append(cuts, len(payload))
+	for i := 0; i < len(cuts); i++ {
+		for j := i + 1; j < len(cuts); j++ {
+			if cuts[j] < cuts[i] {
+				cuts[i], cuts[j] = cuts[j], cuts[i]
+			}
+		}
+	}
+	uniq := cuts[:0]
+	prev := -1
+	for _, x := range cuts {
+		if x != prev {
+			uniq = append(uniq, x)
+			prev = x
+		}
+	}
+	if len(uniq) < 3 {
+		return writeDisorder(c, payload, firstPos(positions, 1))
+	}
+	// reverse segment order
+	for i := len(uniq) - 2; i >= 0; i-- {
+		chunk := payload[uniq[i]:uniq[i+1]]
+		if len(chunk) == 0 {
+			continue
+		}
+		if _, err := c.Write(chunk); err != nil {
+			return err
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	return nil
 }
 
 // extractTLSServerName — hostname из ClientHello SNI (пустая строка если нет).
@@ -684,19 +868,21 @@ func applyPrimitives(up net.Conn, host string, rule Rule, payload []byte) error 
 			}
 			// fake не заменяет реальный payload — реальный уйдёт следующим примитивом или в конце
 		case "split":
-			pos := p.Positions
-			if p.SplitSNI {
-				if sni := findSNIOffset(payload); sni > 0 {
-					pos = append(append([]int{}, pos...), sni)
-				}
-			}
+			pos := resolveSplitPos(payload, p.Positions, p.SplitSNI)
 			if err := writeChunks(up, payload, pos); err != nil {
 				return err
 			}
 			wrote = true
 			return nil
 		case "disorder":
-			if err := writeDisorder(up, payload, firstPos(p.Positions, 1)); err != nil {
+			pos := resolveSplitPos(payload, p.Positions, p.SplitSNI)
+			var err error
+			if len(pos) > 1 || p.SplitSNI {
+				err = writeMultiDisorder(up, payload, pos)
+			} else {
+				err = writeDisorder(up, payload, firstPos(pos, 1))
+			}
+			if err != nil {
 				return err
 			}
 			wrote = true
@@ -720,12 +906,7 @@ func applyPrimitives(up net.Conn, host string, rule Rule, payload []byte) error 
 			wrote = true
 			return nil
 		case "multisplit":
-			pos := append([]int{}, p.Positions...)
-			if p.SplitSNI {
-				if sni := findSNIOffset(payload); sni > 0 {
-					pos = append(pos, sni)
-				}
-			}
+			pos := resolveSplitPos(payload, p.Positions, p.SplitSNI)
 			var err error
 			if len(pos) == 0 {
 				err = writeEvenParts(up, payload, p.Parts)
@@ -733,6 +914,41 @@ func applyPrimitives(up net.Conn, host string, rule Rule, payload []byte) error 
 				err = writeChunks(up, payload, pos)
 			}
 			if err != nil {
+				return err
+			}
+			wrote = true
+			return nil
+		case "hostfakesplit":
+			// zapret2/Flowseal ALT3: fake,hostfakesplit + fooling=ts + host=www.google.com
+			// На SOCKS: (1) optional full white-SNI fake@TTL, (2) hostfakesplit с TTL на fake host.
+			ttl := p.FakeTTL
+			if ttl <= 0 {
+				ttl = 1
+			}
+			repeats := p.FakeRepeats
+			if repeats <= 0 {
+				repeats = 6
+			}
+			sni := p.FakeSNI
+			if sni == "" {
+				sni = "www.google.com"
+			}
+			fake := makeTLSFake(payload, Primitive{FakeSNI: sni, FakeSize: p.FakeSize, FakeTTL: ttl})
+			ttlOK := setConnTTL(up, ttl) == nil
+			for i := 0; i < repeats; i++ {
+				if _, err := up.Write(fake); err != nil {
+					if ttlOK {
+						resetConnTTL(up)
+					}
+					return err
+				}
+				time.Sleep(1 * time.Millisecond)
+			}
+			if ttlOK {
+				resetConnTTL(up)
+			}
+			log.Printf("desync: hostfakesplit white-sni=%s size=%d ttl=%d repeats=%d midhost=%v host=%s", sni, len(fake), ttl, repeats, p.SplitSNI, host)
+			if err := writeHostFakeSplit(up, payload, sni, ttl, true); err != nil {
 				return err
 			}
 			wrote = true

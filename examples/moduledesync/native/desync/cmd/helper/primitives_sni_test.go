@@ -59,6 +59,35 @@ func TestRewriteSNINotFirstExtension(t *testing.T) {
 	}
 }
 
+func TestSameLenHost(t *testing.T) {
+	h := sameLenHost("www.google.com", len("nnmclub.to"))
+	if len(h) != len("nnmclub.to") {
+		t.Fatalf("len=%d", len(h))
+	}
+	h2 := sameLenHost("ya.ru", 20)
+	if len(h2) != 20 || !bytes.Contains(h2, []byte("ya.ru")) {
+		t.Fatalf("%q", h2)
+	}
+}
+
+func TestFindMidSLD(t *testing.T) {
+	hello := buildTLSClientHello("images.example.com")
+	name, _, hostPos, hostLen, _ := parseTLSClientHelloSNI(hello)
+	if name != "images.example.com" || hostPos < 0 {
+		t.Fatalf("parse name=%q hostPos=%d", name, hostPos)
+	}
+	mid := findMidSLD(hello)
+	// SLD = example (после images.), mid = hostPos + 7 + 3
+	want := hostPos + len("images.") + len("example")/2
+	if mid != want {
+		t.Fatalf("midsld=%d want %d (hostPos=%d hostLen=%d)", mid, want, hostPos, hostLen)
+	}
+	fullMid := findSNIOffset(hello)
+	if mid == fullMid {
+		t.Fatalf("midsld=%d should differ from full-host mid=%d", mid, fullMid)
+	}
+}
+
 func TestMakeTLSFakeWhiteSNI(t *testing.T) {
 	orig := padTLSClientHello(buildTLSClientHelloSNINotFirst("blocked.example"), 500)
 	fake := makeTLSFake(orig, Primitive{FakeSNI: "www.google.com", FakeSize: 1200})

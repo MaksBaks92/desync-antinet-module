@@ -204,40 +204,22 @@ func softByedpiPrims(opts desyncOpts) []Primitive {
 	}
 }
 
-// cloudflareWhiteSNI — домен из «белого» списка DPI на CF-подсетях (16k whitelist).
-// Zapret: --dpi-desync=fake --dpi-desync-fake-tls-mod=sni=<white>.
+// cloudflareWhiteSNI — белый SNI для 16k/CF (zapret fake-tls-mod=sni=www.google.com).
 const cloudflareWhiteSNI = "www.google.com"
 
-// cloudflareFakeTTL — hops: DPI видит fake, CF origin — нет.
-// TTL=1 (1.2.9) на WiFi умирает на домашнем роутере → DPI не видит white-SNI.
-// TTL=8 (1.2.8) доходит до CF anycast → RST. 4 — типичный sweet-spot WiFi/ISP.
-const cloudflareFakeTTL = 4
+// cloudflareFakeTTL — на SOCKS нет md5sig/ts/badseq (zapret --dpi-desync-fooling).
+// Единственный fooling — TTL. TTL=4/8 травит близкий CF/GGC; TTL=1 — меньше яда.
+const cloudflareFakeTTL = 1
 
-// cloudflareSoftPrims — 16k на CF: белый ClientHello @ TTL=4, затем real CH
-// multisplit на середине SNI (zapret midsld / hostfakesplit-lite без seq-fooling).
+// cloudflareSoftPrims — zapret2/Flowseal ALT3 (Google/CF) на SOCKS:
+//   --dpi-desync=fake,hostfakesplit
+//   --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com
+//   --dpi-desync-hostfakesplit-mod=host=www.google.com (+ midhost=midsld)
+//   --dpi-desync-fooling=ts  → на SOCKS только TTL (md5sig/ts/seqovl недоступны)
 func cloudflareSoftPrims(opts desyncOpts) []Primitive {
 	_ = opts
 	return []Primitive{
-		{Kind: "fake", FakeTTL: cloudflareFakeTTL, FakeRepeats: 1, FakeSNI: cloudflareWhiteSNI, FakeSize: 1200},
-		{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
-	}
-}
-
-// googlevideoPrims — YT app (QUIC часто мёртв → TCP fallback): fake+tlsrec+OOB
-// сильнее голого byedpi-oob; browser уже ходит TCP и «работает».
-func googlevideoPrims(opts desyncOpts) []Primitive {
-	pos := opts.SplitPos
-	if pos == 0 {
-		pos = 1
-	}
-	oob := opts.OOBChar
-	if oob == 0 {
-		oob = 'a'
-	}
-	return []Primitive{
-		{Kind: "fake", FakeTTL: 8, FakeRepeats: 1, FakeSize: 1200},
-		{Kind: "tlsrec", TlsRecAt: -5, TlsRecSNI: true, TlsRecEnd: true},
-		{Kind: "oob", Positions: []int{pos}, OOBChar: oob},
+		{Kind: "hostfakesplit", FakeTTL: cloudflareFakeTTL, FakeRepeats: 1, FakeSNI: cloudflareWhiteSNI, FakeSize: 1200, SplitSNI: true},
 	}
 }
 
@@ -259,12 +241,8 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		}
 	}
 
-	// googlevideo CDN: YT app video; сильнее oob (1.2.10).
-	if p.Name != "passthrough" && isGooglevideoHost(host) && portOK(port, defaultPorts()) {
-		return Rule{Name: "googlevideo-fake-oob", Prims: googlevideoPrims(opts)}, true
-	}
-
 	// Превью (ggpht/ytimg): soft OOB без tlsrec (1.2.4); disorder → RST (1.2.6).
+	// googlevideo — обычный byedpi (1.2.10 fake@TTL=8 травил CDN → down=0B).
 	if p.Name != "passthrough" && isYoutubeImageHost(host) && portOK(port, defaultPorts()) {
 		method := strings.ToLower(strings.TrimSpace(opts.Method))
 		if method == "" {
