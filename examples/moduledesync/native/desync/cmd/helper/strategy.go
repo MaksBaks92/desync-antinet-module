@@ -175,12 +175,44 @@ func byedpiPrims(opts desyncOpts) []Primitive {
 	}
 }
 
-// cloudflareSoftPrims — CF anycast/ECH: tlsrec+OOB и голый split → RST (1.2.4–1.2.5).
-// byeDPI Windows-рецепт: fake (TTL умирает до сервера) + disorder (DPI не собирает CH).
+// softByedpiPrims — method без tlsrec. Превью ggpht/ytimg: полный DEFAULT (-r+OOB)
+// и голый disorder → RST ~100ms (1.2.6); passthrough → hang 2м.
+func softByedpiPrims(opts desyncOpts) []Primitive {
+	pos := opts.SplitPos
+	if pos == 0 {
+		pos = 1
+	}
+	oob := opts.OOBChar
+	if oob == 0 {
+		oob = 'a'
+	}
+	switch strings.ToLower(strings.TrimSpace(opts.Method)) {
+	case "split":
+		return []Primitive{{Kind: "split", Positions: []int{pos}}}
+	case "disorder":
+		return []Primitive{{Kind: "disorder", Positions: []int{pos}}}
+	case "disoob":
+		return []Primitive{{Kind: "disoob", Positions: []int{pos}, OOBChar: oob}}
+	case "fake":
+		return []Primitive{
+			{Kind: "fake", FakeTTL: 8, FakeRepeats: 1, FakeSize: 1200},
+			{Kind: "split", Positions: []int{pos}},
+		}
+	default: // oob без tlsrec
+		return []Primitive{{Kind: "oob", Positions: []int{pos}, OOBChar: oob}}
+	}
+}
+
+// cloudflareSoftPrims — CF: tlsrec+OOB/split → RST; passthrough/fake+disorder → silent-wall 0B.
+// fake (TTL умирает) + OOB без tlsrec/disorder — отвлечь DPI и не рвать CH.
 func cloudflareSoftPrims(opts desyncOpts) []Primitive {
 	pos := opts.SplitPos
 	if pos == 0 {
 		pos = 1
+	}
+	oob := opts.OOBChar
+	if oob == 0 {
+		oob = 'a'
 	}
 	ttl := opts.FakeTTL
 	if ttl <= 0 {
@@ -188,18 +220,8 @@ func cloudflareSoftPrims(opts desyncOpts) []Primitive {
 	}
 	return []Primitive{
 		{Kind: "fake", FakeTTL: ttl, FakeRepeats: 1, FakeSize: 1200},
-		{Kind: "disorder", Positions: []int{pos}},
+		{Kind: "oob", Positions: []int{pos}, OOBChar: oob},
 	}
-}
-
-// youtubeImagePrims — превью: passthrough → DPI hang 2м (YT «хуже»);
-// tlsrec+OOB на части сетей 0B. disorder без tlsrec/OOB — середина.
-func youtubeImagePrims(opts desyncOpts) []Primitive {
-	pos := opts.SplitPos
-	if pos == 0 {
-		pos = 1
-	}
-	return []Primitive{{Kind: "disorder", Positions: []int{pos}}}
 }
 
 // selectRule — первое подходящее правило с учётом hostsMode (ByeByeDPI).
@@ -209,9 +231,9 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		return Rule{Name: "hosts-gate-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
 
-	// Cloudflare: fake+disorder (не tlsrec/OOB, не голый split/passthrough).
+	// Cloudflare: fake+oob (не tlsrec, не disorder, не passthrough/split).
 	if p.Name != "passthrough" && isCloudflareTarget(host, dialIP) && portOK(port, defaultPorts()) {
-		return Rule{Name: "cloudflare-fake-disorder", Prims: cloudflareSoftPrims(opts)}, true
+		return Rule{Name: "cloudflare-fake-oob", Prims: cloudflareSoftPrims(opts)}, true
 	}
 
 	if !protocolOK(opts, payload) && p.Name != "passthrough" {
@@ -220,9 +242,13 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		}
 	}
 
-	// Превью (ggpht/ytimg): disorder, не passthrough (hang) и не полный DEFAULT.
+	// Превью (ggpht/ytimg): soft OOB без tlsrec (1.2.4); disorder → RST (1.2.6).
 	if p.Name != "passthrough" && isYoutubeImageHost(host) && portOK(port, defaultPorts()) {
-		return Rule{Name: "youtube-image-disorder", Prims: youtubeImagePrims(opts)}, true
+		method := strings.ToLower(strings.TrimSpace(opts.Method))
+		if method == "" {
+			method = "oob"
+		}
+		return Rule{Name: "byedpi-soft-" + method, Prims: softByedpiPrims(opts)}, true
 	}
 
 	// ByeByeDPI-путь (auto/byedpi): method из настроек (oob/fake/…), не Flowseal multisplit.
