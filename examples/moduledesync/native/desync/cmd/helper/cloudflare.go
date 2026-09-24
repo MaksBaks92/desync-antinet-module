@@ -98,16 +98,11 @@ func isCloudflareTarget(host, dialIP string) bool {
 	return false
 }
 
-// isYoutubeImageHost — превью/аватарки/картинки (ggpht, ytimg, lh*).
-// Полный tlsrec+OOB на SOCKS даёт timeout/0B; видео (googlevideo QUIC) не трогаем.
+// isYoutubeImageHost — только превью CDN (ggpht/ytimg).
+// googleusercontent.com целиком НЕ матчим: passthrough ломал прочий Google-трафик (YT «хуже»).
 func isYoutubeImageHost(host string) bool {
 	return hostMatch(host, []string{
 		"ggpht.com",
 		"ytimg.com",
-		"googleusercontent.com",
-		"lh3.google.com",
-		"lh4.google.com",
-		"lh5.google.com",
-		"lh6.google.com",
 	})
 }

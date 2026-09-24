@@ -175,14 +175,31 @@ func byedpiPrims(opts desyncOpts) []Primitive {
 	}
 }
 
-// cloudflareSoftPrims — CF anycast/ECH: tlsrec+OOB путают CF middlebox → RST;
-// чистый passthrough часто не обходит DPI. Мягкий split без OOB/tlsrec.
+// cloudflareSoftPrims — CF anycast/ECH: tlsrec+OOB и голый split → RST (1.2.4–1.2.5).
+// byeDPI Windows-рецепт: fake (TTL умирает до сервера) + disorder (DPI не собирает CH).
 func cloudflareSoftPrims(opts desyncOpts) []Primitive {
 	pos := opts.SplitPos
 	if pos == 0 {
 		pos = 1
 	}
-	return []Primitive{{Kind: "split", Positions: []int{pos}}}
+	ttl := opts.FakeTTL
+	if ttl <= 0 {
+		ttl = 8
+	}
+	return []Primitive{
+		{Kind: "fake", FakeTTL: ttl, FakeRepeats: 1, FakeSize: 1200},
+		{Kind: "disorder", Positions: []int{pos}},
+	}
+}
+
+// youtubeImagePrims — превью: passthrough → DPI hang 2м (YT «хуже»);
+// tlsrec+OOB на части сетей 0B. disorder без tlsrec/OOB — середина.
+func youtubeImagePrims(opts desyncOpts) []Primitive {
+	pos := opts.SplitPos
+	if pos == 0 {
+		pos = 1
+	}
+	return []Primitive{{Kind: "disorder", Positions: []int{pos}}}
 }
 
 // selectRule — первое подходящее правило с учётом hostsMode (ByeByeDPI).
@@ -192,9 +209,9 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		return Rule{Name: "hosts-gate-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
 
-	// Cloudflare: не tlsrec/OOB (RST), не голый passthrough (DPI) — только split.
+	// Cloudflare: fake+disorder (не tlsrec/OOB, не голый split/passthrough).
 	if p.Name != "passthrough" && isCloudflareTarget(host, dialIP) && portOK(port, defaultPorts()) {
-		return Rule{Name: "cloudflare-soft-split", Prims: cloudflareSoftPrims(opts)}, true
+		return Rule{Name: "cloudflare-fake-disorder", Prims: cloudflareSoftPrims(opts)}, true
 	}
 
 	if !protocolOK(opts, payload) && p.Name != "passthrough" {
@@ -203,10 +220,9 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		}
 	}
 
-	// Превью/аватарки (ggpht, ytimg): полный DEFAULT и soft-OOB дают 0B — без desync.
-	// Видео (googlevideo QUIC + udp-fake) не трогаем.
+	// Превью (ggpht/ytimg): disorder, не passthrough (hang) и не полный DEFAULT.
 	if p.Name != "passthrough" && isYoutubeImageHost(host) && portOK(port, defaultPorts()) {
-		return Rule{Name: "youtube-image-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+		return Rule{Name: "youtube-image-disorder", Prims: youtubeImagePrims(opts)}, true
 	}
 
 	// ByeByeDPI-путь (auto/byedpi): method из настроек (oob/fake/…), не Flowseal multisplit.
