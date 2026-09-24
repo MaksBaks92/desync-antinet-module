@@ -1,0 +1,4 @@
+# ByeByeDPI googlevideo.sites имел конкретные RR-хосты — для матча достаточно суффикса
+googlevideo.com
+ggpht.com
+ytimg.com

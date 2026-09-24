@@ -1,8 +1,23 @@
 // SPDX-License-Identifier: MIT
 package main
 
-// Пресеты: intent Flowseal general / ALT / ALT2, урезанный до SOCKS-примитивов.
+// Пресеты: byedpi (дефолт ByeByeDPI) + Flowseal general / ALT / ALT2.
 // seqovl / fooling=ts / fakedsplit pattern inject → unsupported (логируется, пропускается).
+
+func presetByeDPI() Preset {
+	return Preset{
+		Name:        "byedpi",
+		Description: "ByeByeDPI UI default: OOB@1 на весь TLS/HTTP (hostsMode=all). Метод/позиция — из настроек.",
+		Rules: []Rule{
+			{
+				Name:    "byedpi-all",
+				Buckets: []matchBucket{bucketAll},
+				Ports:   defaultPorts(),
+				Prims:   []Primitive{{Kind: "oob", Positions: []int{1}, OOBChar: 'a'}},
+			},
+		},
+	}
+}
 
 func presetGeneral() Preset {
 	return Preset{
@@ -222,11 +237,11 @@ func presetPassthrough() Preset {
 	}
 }
 
-func selectRuleForPreset(name string, host string, port uint16, lists hostLists, payload []byte) (Rule, Preset, bool) {
+func selectRuleForPreset(name string, host string, port uint16, lists hostLists, payload []byte, opts desyncOpts) (Rule, Preset, bool) {
 	p := getPreset(name)
 	if p.Name == "passthrough" {
 		return p.Rules[0], p, true
 	}
-	r, ok := selectRule(p, host, port, lists, payload)
+	r, ok := selectRule(p, host, port, lists, payload, opts)
 	return r, p, ok
 }

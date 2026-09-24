@@ -4,6 +4,9 @@ package main
 import (
 	"bufio"
 	_ "embed"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -17,10 +20,34 @@ var listGoogleRaw string
 //go:embed lists/list-exclude.txt
 var listExcludeRaw string
 
+//go:embed lists/builtin-youtube.txt
+var builtinYoutubeRaw string
+
+//go:embed lists/builtin-googlevideo.txt
+var builtinGooglevideoRaw string
+
+//go:embed lists/builtin-discord.txt
+var builtinDiscordRaw string
+
+//go:embed lists/builtin-telegram.txt
+var builtinTelegramRaw string
+
+//go:embed lists/builtin-social.txt
+var builtinSocialRaw string
+
+//go:embed lists/builtin-cloudflare.txt
+var builtinCloudflareRaw string
+
+//go:embed lists/builtin-general.txt
+var builtinGeneralRaw string
+
 type hostLists struct {
 	general []string
 	google  []string
 	exclude []string
+	// filter — объединённый список для hostsMode whitelist/blacklist
+	// (builtin + userDomains + profileDir/user-hosts.txt).
+	filter []string
 }
 
 var (
@@ -39,6 +66,16 @@ func loadDefaultLists() hostLists {
 	return defaultLists
 }
 
+var builtinListRaw = map[string]string{
+	"youtube":     builtinYoutubeRaw,
+	"googlevideo": builtinGooglevideoRaw,
+	"discord":     builtinDiscordRaw,
+	"telegram":    builtinTelegramRaw,
+	"social":      builtinSocialRaw,
+	"cloudflare":  builtinCloudflareRaw,
+	"general":     builtinGeneralRaw,
+}
+
 func parseHostlist(raw string) []string {
 	var out []string
 	for _, line := range strings.Split(raw, "\n") {
@@ -51,8 +88,72 @@ func parseHostlist(raw string) []string {
 	return out
 }
 
-// hostMatch — Flowseal-style: ^prefix = exact/suffix-anchored domain match helper;
-// иначе substring/suffix match на FQDN (host или *.host).
+func parseBuiltinListIDs(csv string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(csv, ",") {
+		id := strings.ToLower(strings.TrimSpace(p))
+		if id == "" || seen[id] {
+			continue
+		}
+		if _, ok := builtinListRaw[id]; !ok {
+			log.Printf("desync: unknown builtin list %q (known: youtube,googlevideo,discord,telegram,social,cloudflare,general)", id)
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// buildFilterHosts — ByeByeDPI-like: активные builtin + SETTING_userDomains + user-hosts.txt.
+func buildFilterHosts(builtinCSV, userDomains, profileDir string) []string {
+	var parts []string
+	for _, id := range parseBuiltinListIDs(builtinCSV) {
+		parts = append(parts, parseHostlist(builtinListRaw[id])...)
+	}
+	parts = append(parts, parseHostlist(userDomains)...)
+	if profileDir != "" {
+		path := filepath.Join(profileDir, "user-hosts.txt")
+		ensureUserHostsFile(path)
+		if b, err := os.ReadFile(path); err == nil {
+			parts = append(parts, parseHostlist(string(b))...)
+		}
+	}
+	return uniqHosts(parts)
+}
+
+func uniqHosts(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, h := range in {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	return out
+}
+
+func ensureUserHostsFile(path string) {
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	header := `# user-hosts.txt — свои домены (по одному на строку).
+# Работает вместе с настройкой «Свои домены» и режимом Хосты (whitelist/blacklist).
+# При hostsMode=all этот файл не фильтрует: desync на весь TLS/HTTP, как ByeByeDPI по умолчанию.
+#
+# Примеры:
+# youtube.com
+# discord.com
+`
+	_ = os.WriteFile(path, []byte(header), 0o644)
+}
+
+// hostMatch — Flowseal-style: ^prefix = exact/suffix-anchored;
+// иначе substring/suffix match на FQDN.
 func hostMatch(host string, patterns []string) bool {
 	h := strings.ToLower(strings.TrimSuffix(host, "."))
 	if h == "" {
@@ -89,6 +190,10 @@ func (hl hostLists) excluded(host string) bool {
 	return hostMatch(host, hl.exclude)
 }
 
+func (hl hostLists) inFilter(host string) bool {
+	return hostMatch(host, hl.filter)
+}
+
 func (hl hostLists) inGeneral(host string) bool {
 	return hostMatch(host, hl.general)
 }
@@ -112,7 +217,7 @@ func (hl hostLists) isYoutube(host string) bool {
 	})
 }
 
-// matchBucket — какую «корзину» Flowseal-правила применять к host.
+// matchBucket — корзина Flowseal-правила.
 type matchBucket int
 
 const (
@@ -121,7 +226,7 @@ const (
 	bucketGoogle
 	bucketDiscord
 	bucketGeneral
-	bucketAll // без hostlist (ipset-all аналог на SOCKS: любой хост)
+	bucketAll
 )
 
 func (hl hostLists) classify(host string) matchBucket {
@@ -140,9 +245,26 @@ func (hl hostLists) classify(host string) matchBucket {
 	return bucketNone
 }
 
+// hostsModeGate — аналог ByeByeDPI HostsMode.
+// all: как Disable — desync на всё подходящее по протоколу.
+// whitelist: только host из filter.
+// blacklist: всё, кроме filter.
+func hostsModeGate(mode, host string, lists hostLists) bool {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if lists.excluded(host) {
+		return false
+	}
+	switch mode {
+	case "whitelist":
+		return lists.inFilter(host)
+	case "blacklist":
+		return !lists.inFilter(host)
+	default: // all / disable / ""
+		return true
+	}
+}
+
 // readFirstPayload — первый клиентский кусок после SOCKS CONNECT success.
-// Ждём хотя бы 1 байт (дедлайн на conn снаружи), забираем всё уже буферизованное,
-// затем коротко добираем хвост ClientHello, если он доехал отдельным сегментом.
 func readFirstPayload(br *bufio.Reader, max int) ([]byte, error) {
 	if max <= 0 {
 		max = 16 * 1024

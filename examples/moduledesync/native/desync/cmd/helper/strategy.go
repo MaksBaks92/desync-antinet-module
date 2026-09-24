@@ -1,52 +1,45 @@
 // SPDX-License-Identifier: MIT
 //
-// Strategy engine: именованные пресеты → цепочки SOCKS-path примитивов.
-// Intent портирован с Flowseal/zapret-discord-youtube (general/ALT*); seqovl/WinDivert —
-// unsupported (см. README).
+// Strategy engine: ByeByeDPI-like (byedpi) + Flowseal-inspired presets.
 package main
 
 import "strings"
 
 // Primitive — один шаг desync на первом payload.
 type Primitive struct {
-	Kind string // split | multisplit | fake | tlsrec | passthrough | unsupported
+	Kind string // split | multisplit | disorder | oob | disoob | fake | tlsrec | passthrough | unsupported
 
-	// split / multisplit
-	Positions []int  // абсолютные смещения; 0 = «после 1-го байта» стиля Flowseal split-pos=1
-	SplitSNI  bool   // резать перед SNI в TLS ClientHello, если найден
-	Parts     int    // multisplit: на сколько кусков (если Positions пуст)
+	Positions []int
+	SplitSNI  bool
+	Parts     int
 
-	// fake
-	FakeTTL     int // временный TTL для фейка (0 = не трогать / недоступно)
+	FakeTTL     int
 	FakeRepeats int
-	FakeSize    int // размер синтетического TLS-like blob
+	FakeSize    int
 
-	// tlsrec
-	TlsRecAt int // байт внутри TLS record payload, после которого режем record
+	TlsRecAt int
+	OOBChar  byte // для oob/disoob; 0 → 'a' как ByeByeDPI
 
-	Note string // почему unsupported / комментарий
+	Note string
 }
 
-// Rule — одно правило пресета (аналог сегмента winws между --new).
 type Rule struct {
-	Name     string
-	Buckets  []matchBucket // пусто = любой не-exclude
-	Ports    []uint16      // пусто = 80,443 и типичные
-	Prims    []Primitive
+	Name    string
+	Buckets []matchBucket
+	Ports   []uint16
+	Prims   []Primitive
 }
 
-// Preset — готовый профиль.
 type Preset struct {
 	Name        string
 	Description string
 	Rules       []Rule
-	// AutoChain — запасные пресеты для режима auto (порядок failover).
-	AutoChain []string
+	AutoChain   []string
 }
 
 func knownPreset(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "general", "alt", "alt2", "youtube", "discord", "safe", "auto", "passthrough":
+	case "byedpi", "general", "alt", "alt2", "youtube", "discord", "safe", "auto", "passthrough":
 		return true
 	}
 	return false
@@ -54,6 +47,8 @@ func knownPreset(name string) bool {
 
 func getPreset(name string) Preset {
 	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "byedpi":
+		return presetByeDPI()
 	case "alt":
 		return presetAlt()
 	case "alt2":
@@ -94,7 +89,7 @@ func bucketOK(b matchBucket, want []matchBucket) bool {
 		return false
 	}
 	if len(want) == 0 {
-		return b != bucketNone // только hostlist-матч; «all» правила задают bucketAll явно
+		return b != bucketNone
 	}
 	for _, w := range want {
 		if w == bucketAll {
@@ -107,12 +102,100 @@ func bucketOK(b matchBucket, want []matchBucket) bool {
 	return false
 }
 
-// selectRule — первое подходящее правило пресета.
-// host — предпочтительно SNI/HTTP Host (не dial-IP): AntiNet часто даёт CONNECT по IP.
-func selectRule(p Preset, host string, port uint16, lists hostLists, payload []byte) (Rule, bool) {
+// desyncOpts — настройки карточки модуля (ByeByeDPI UI analogy).
+type desyncOpts struct {
+	HostsMode    string // all | whitelist | blacklist
+	Method       string // oob | disoob | split | disorder | fake | multisplit
+	SplitPos     int
+	OOBChar      byte
+	DesyncHTTPS  bool
+	DesyncHTTP   bool
+}
+
+func defaultDesyncOpts() desyncOpts {
+	return desyncOpts{
+		HostsMode:   "all",
+		Method:      "oob",
+		SplitPos:    1,
+		OOBChar:     'a',
+		DesyncHTTPS: true,
+		DesyncHTTP:  true,
+	}
+}
+
+func protocolOK(opts desyncOpts, payload []byte) bool {
+	if looksLikeTLSClientHello(payload) && opts.DesyncHTTPS {
+		return true
+	}
+	if looksLikeHTTP(payload) && opts.DesyncHTTP {
+		return true
+	}
+	return false
+}
+
+func byedpiPrims(opts desyncOpts) []Primitive {
+	pos := opts.SplitPos
+	if pos == 0 {
+		pos = 1
+	}
+	oob := opts.OOBChar
+	if oob == 0 {
+		oob = 'a'
+	}
+	switch strings.ToLower(strings.TrimSpace(opts.Method)) {
+	case "split":
+		return []Primitive{{Kind: "split", Positions: []int{pos}}}
+	case "disorder":
+		return []Primitive{{Kind: "disorder", Positions: []int{pos}}}
+	case "disoob":
+		return []Primitive{{Kind: "disoob", Positions: []int{pos}, OOBChar: oob}}
+	case "fake":
+		return []Primitive{
+			{Kind: "fake", FakeTTL: 8, FakeRepeats: 1, FakeSize: 1200},
+			{Kind: "split", Positions: []int{pos}},
+		}
+	case "multisplit":
+		return []Primitive{{Kind: "multisplit", Positions: []int{pos}, SplitSNI: true, Parts: 2}}
+	default: // oob — ByeByeDPI default
+		return []Primitive{{Kind: "oob", Positions: []int{pos}, OOBChar: oob}}
+	}
+}
+
+// selectRule — первое подходящее правило с учётом hostsMode (ByeByeDPI).
+func selectRule(p Preset, host string, port uint16, lists hostLists, payload []byte, opts desyncOpts) (Rule, bool) {
+	if !hostsModeGate(opts.HostsMode, host, lists) {
+		return Rule{Name: "hosts-gate-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+	}
+	if !protocolOK(opts, payload) && p.Name != "passthrough" {
+		// Узкие пресеты youtube/discord всё ещё могут матчить по bucket без TLS-сигнатуры.
+		if p.Name != "youtube" && p.Name != "discord" {
+			return Rule{Name: "proto-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+		}
+	}
+
+	if p.Name == "byedpi" {
+		if !portOK(port, defaultPorts()) {
+			return Rule{Name: "port-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+		}
+		return Rule{Name: "byedpi-" + strings.ToLower(opts.Method), Prims: byedpiPrims(opts)}, true
+	}
+
 	b := lists.classify(host)
 	if b == bucketExclude {
 		return Rule{Name: "exclude-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+	}
+	// hostsMode=all: предпочитаем bucketAll-правила (как ByeByeDPI Disable).
+	if strings.ToLower(opts.HostsMode) == "all" || opts.HostsMode == "" {
+		for _, r := range p.Rules {
+			if !portOK(port, r.Ports) {
+				continue
+			}
+			for _, w := range r.Buckets {
+				if w == bucketAll {
+					return r, true
+				}
+			}
+		}
 	}
 	for _, r := range p.Rules {
 		if !portOK(port, r.Ports) {
@@ -123,14 +206,9 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		}
 		return r, true
 	}
-	// Fallback для broad-пресетов: на TLS/HTTP всё равно применять desync,
-	// иначе при CONNECT-по-IP (типичный путь sing-box) всё уходит в passthrough.
 	if p.Name != "youtube" && p.Name != "discord" && p.Name != "passthrough" {
 		if portOK(port, defaultPorts()) && (looksLikeTLSClientHello(payload) || looksLikeHTTP(payload)) {
-			return Rule{
-				Name: "tls-http-fallback",
-				Prims: fallbackPrims(p.Name),
-			}, true
+			return Rule{Name: "tls-http-fallback", Prims: fallbackPrims(p.Name)}, true
 		}
 	}
 	return Rule{Name: "no-match-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
@@ -144,16 +222,10 @@ func fallbackPrims(preset string) []Primitive {
 			{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
 		}
 	case "alt2":
-		return []Primitive{
-			{Kind: "multisplit", Positions: []int{2}, SplitSNI: true, Parts: 3},
-		}
+		return []Primitive{{Kind: "multisplit", Positions: []int{2}, SplitSNI: true, Parts: 3}}
 	case "safe":
-		return []Primitive{
-			{Kind: "split", Positions: []int{1}},
-		}
-	default: // general
-		return []Primitive{
-			{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
-		}
+		return []Primitive{{Kind: "split", Positions: []int{1}}}
+	default:
+		return []Primitive{{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2}}
 	}
 }

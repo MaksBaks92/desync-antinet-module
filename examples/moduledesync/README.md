@@ -1,60 +1,50 @@
 # module desync — SOCKS DPI-desync для AntiNet
 
-Локальный SOCKS5-модуль: AntiNet гонит трафик в helper, тот делает protect-dial и на
-**первом клиентском payload** применяет стратегию desync (split / multisplit / fake / tlsrec),
-затем обычный bidi-relay. Своего VPN/TUN нет — захват уже у хоста.
+Локальный SOCKS5-модуль по модели [ByeByeDPI](https://github.com/romanvht/ByeByeDPI):
+AntiNet гонит трафик в helper → protect-dial → на **первом payload** desync
+(OOB / split / disorder / fake / multisplit), затем bidi-relay. Своего VPN/TUN нет.
 
-Схема ссылок: `desync://`.
+Схема: `desync://`.
+
+## Как у ByeByeDPI
+
+| ByeByeDPI | Этот модуль |
+|---|---|
+| VpnService → hev-socks5-tunnel → ciadpi SOCKS | AntiNet VPN → модуль SOCKS (уже есть) |
+| Дефолт: OOB, split pos=1, hosts=Нет | пресет `byedpi`, method=`oob`, hostsMode=`all` |
+| whitelist / blacklist хостов | `hostsMode` + `userDomains` + builtin lists |
+| Свои списки доменов в UI | настройка «Свои домены» + `profileDir/user-hosts.txt` |
+
+## Свои домены
+
+1. В карточке модуля: поле **Свои домены** (по одному на строку).
+2. Файл **`user-hosts.txt`** в каталоге профиля helper (создаётся при старте).
+3. **Встроенные списки** (через запятую): `youtube`, `googlevideo`, `discord`,
+   `telegram`, `social`, `cloudflare`, `general` — из ассетов ByeByeDPI.
+
+Режим **Хосты**:
+- `all` — desync на весь TLS/HTTP (как ByeByeDPI «Нет»)
+- `whitelist` — только домены из своих+builtin
+- `blacklist` — всё, кроме списка
 
 ## Ссылки
 
 | Ссылка | Смысл |
 |---|---|
-| `desync://general` | пресет general |
-| `desync://alt#Домашний` | alt, имя в карточке «Домашний» |
-| `desync://auto?auto=1` | auto + флаг failover |
+| `desync://byedpi` | дефолт ByeByeDPI |
+| `desync://general` | Flowseal-like multisplit |
+| `desync://alt#Домашний` | alt, имя «Домашний» |
 | `desync://passthrough` | без desync |
-| `desync:general` / JSON | `normalize` → канон `desync://…` |
 
-Пресет также задаётся в карточке модуля (`settings.preset`) и перекрывает путь ссылки.
+## Ограничения
 
-## Пресеты
-
-| Имя | Intent (Flowseal) | SOCKS-реализация |
-|---|---|---|
-| `general` | multisplit + seqovl | multisplit (+SNI); **seqovl skipped** |
-| `alt` | fake,fakedsplit + fooling=ts | fake(TTL) + multisplit; **ts/fakedsplit inject skipped** |
-| `alt2` | multisplit pos=2 + seqovl | multisplit parts/pos≈2; **seqovl skipped** |
-| `youtube` | google/youtube lists | fake + multisplit + tlsrec |
-| `discord` | discord hostlist | fake + multisplit (UDP-fake — MVP passthrough) |
-| `safe` | мягкий режим | один split |
-| `auto` | цепочка | general→alt→alt2→safe (см. лог; полный failover — реконнект) |
-| `passthrough` | — | чистый проброс |
-
-Hostlists (embed): `lists/list-general.txt`, `list-google.txt`, `list-exclude.txt`
-(стартовые списки в духе Flowseal).
-
-## Ограничения (важно)
-
-На SOCKS-пути **нет** WinDivert/NFQUEUE/raw inject. Поэтому **не поддерживаются**:
-
-- `--dpi-desync-split-seqovl` / seq overlap inject
-- `fooling=ts` / badseq / IP fragmentation
-- полноценный `fakedsplit` как у winws
-- правка SYN / wscale
-- Discord/QUIC UDP-fake (UDP ASSOCIATE = passthrough в MVP)
-
-Модуль логирует `unsupported` и применяет ближайший эквивалент (write-split / TTL-fake).
+На SOCKS-пути нет WinDivert/NFQUEUE: seqovl, fooling=ts, SYN-правки недоступны.
+UDP ASSOCIATE — passthrough (без QUIC fake). OOB на Windows откатывается к split.
 
 ## Сборка
 
-Из корня репозитория:
+Только CI (GitHub Actions). Локально для отладки:
 
 ```bash
-python build.py --module desync --os windows
 python build.py --module desync --os android --abis arm64-v8a
 ```
-
-Артефакты: `examples/moduledesync/dist/desktop/<os>_<arch>/` и `dist/android/<abi>/`.
-
-Контракт — корневой `MODULE_API.md`.

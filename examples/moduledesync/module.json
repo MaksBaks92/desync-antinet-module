@@ -4,10 +4,10 @@
     "desync"
   ],
   "name": "Desync",
-  "description": "Локальный SOCKS5 с DPI-desync (ByeDPI-like): split/multisplit/fake/tlsrec и пресеты в духе Flowseal. Не VPN и не удалённый туннель — AntiNet уже захватывает трафик.",
+  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: OOB/split/disorder/fake, режим хостов all/whitelist/blacklist и свои списки доменов. Не VPN — AntiNet уже захватывает трафик.",
   "homepage": "https://github.com/MaksBaks92/desync-antinet-module",
   "updateUrl": "https://raw.githubusercontent.com/MaksBaks92/desync-antinet-module/main/antinet-module.json",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "license": "MIT",
   "handoverMode": "signal",
   "hostEvents": ["handover", "netlost", "netback", "stall", "dns"],
@@ -19,9 +19,10 @@
     {
       "key": "preset",
       "type": "enum",
-      "label": "Пресет стратегии",
-      "default": "general",
+      "label": "Пресет",
+      "default": "byedpi",
       "options": [
+        {"value": "byedpi", "label": "byedpi (как ByeByeDPI, OOB)"},
         {"value": "general", "label": "general (multisplit)"},
         {"value": "alt", "label": "alt (fake+split)"},
         {"value": "alt2", "label": "alt2 (multisplit pos=2)"},
@@ -31,14 +32,83 @@
         {"value": "auto", "label": "auto"},
         {"value": "passthrough", "label": "passthrough (без desync)"}
       ],
-      "description": "Перекрывает путь ссылки desync://<preset>, если задано в карточке модуля. Intent пресетов — как у Flowseal; seqovl/WinDivert на SOCKS-пути недоступны."
+      "description": "byedpi — дефолт приложения ByeByeDPI. Остальные — Flowseal-подобные. Путь desync://alt в ссылке важнее этой настройки."
+    },
+    {
+      "key": "method",
+      "type": "enum",
+      "label": "Метод desync (byedpi)",
+      "default": "oob",
+      "options": [
+        {"value": "oob", "label": "OOB (как ByeByeDPI)"},
+        {"value": "disoob", "label": "Disorder+OOB"},
+        {"value": "split", "label": "Split"},
+        {"value": "disorder", "label": "Disorder"},
+        {"value": "fake", "label": "Fake+split"},
+        {"value": "multisplit", "label": "Multisplit"}
+      ],
+      "description": "Используется при пресете byedpi. Аналог byedpi_desync_method."
+    },
+    {
+      "key": "splitPosition",
+      "type": "int",
+      "label": "Позиция split/OOB",
+      "default": 1,
+      "min": 1,
+      "max": 2048,
+      "description": "Аналог byedpi_split_position (по умолчанию 1)."
+    },
+    {
+      "key": "hostsMode",
+      "type": "enum",
+      "label": "Хосты",
+      "default": "all",
+      "options": [
+        {"value": "all", "label": "Все (как ByeByeDPI «Нет»)"},
+        {"value": "whitelist", "label": "Белый список"},
+        {"value": "blacklist", "label": "Чёрный список"}
+      ],
+      "description": "all — desync на весь TLS/HTTP. whitelist/blacklist — фильтр по своим+встроенным доменам."
+    },
+    {
+      "key": "userDomains",
+      "type": "string",
+      "label": "Свои домены",
+      "default": "",
+      "description": "По одному домену на строку (или через пробел). Дополнительно можно править user-hosts.txt в каталоге профиля модуля."
+    },
+    {
+      "key": "builtinLists",
+      "type": "string",
+      "label": "Встроенные списки",
+      "default": "youtube,googlevideo",
+      "description": "Через запятую: youtube, googlevideo, discord, telegram, social, cloudflare, general. Пусто — только свои домены. Для whitelist/blacklist."
+    },
+    {
+      "key": "desyncHttps",
+      "type": "bool",
+      "label": "Desync HTTPS",
+      "default": true
+    },
+    {
+      "key": "desyncHttp",
+      "type": "bool",
+      "label": "Desync HTTP",
+      "default": true
+    },
+    {
+      "key": "oobChar",
+      "type": "string",
+      "label": "OOB байт",
+      "default": "a",
+      "description": "Первый символ — данные urgent-байта (byeDPI -e)."
     },
     {
       "key": "auto",
       "type": "bool",
       "label": "Auto failover",
       "default": false,
-      "description": "Включить цепочку general→alt→alt2→safe (полный failover требует реконнекта клиента; в лог пишется подсказка)."
+      "description": "Цепочка general→alt→alt2→safe (полный failover требует реконнекта)."
     },
     {
       "key": "dialTimeoutSec",

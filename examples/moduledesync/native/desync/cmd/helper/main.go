@@ -46,9 +46,29 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		dialTimeout = time.Duration(v) * time.Second
 	}
 
+	opts := defaultDesyncOpts()
+	if m := strings.ToLower(strings.TrimSpace(cfg["SETTING_hostsMode"])); m != "" {
+		opts.HostsMode = m
+	}
+	if m := strings.ToLower(strings.TrimSpace(cfg["SETTING_method"])); m != "" {
+		opts.Method = m
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_splitPosition"])); err == nil {
+		opts.SplitPos = v
+	}
+	if oc := strings.TrimSpace(cfg["SETTING_oobChar"]); oc != "" {
+		opts.OOBChar = oc[0]
+	}
+	if v, ok := cfg["SETTING_desyncHttps"]; ok {
+		opts.DesyncHTTPS = v == "true" || v == "1"
+	}
+	if v, ok := cfg["SETTING_desyncHttp"]; ok {
+		opts.DesyncHTTP = v == "true" || v == "1"
+	}
+
 	dl, ok := parseDesyncLink(link)
 	if !ok {
-		dl = desyncLink{Preset: "general", Raw: link}
+		dl = desyncLink{Preset: "byedpi", Raw: link}
 	}
 	// Настройки модуля — на всю схему. Явный путь в ссылке (desync://alt) важнее,
 	// иначе все конфиги схлопнулись бы в один SETTING_preset.
@@ -64,7 +84,14 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		dl.Auto = true
 	}
 
+	builtinCSV := strings.TrimSpace(cfg["SETTING_builtinLists"])
+	if builtinCSV == "" {
+		builtinCSV = "youtube,googlevideo"
+	}
+	userDomains := cfg["SETTING_userDomains"]
+
 	lists := loadDefaultLists()
+	lists.filter = buildFilterHosts(builtinCSV, userDomains, profileDir)
 	resolver := newProtectedResolver(cfg["DNS_SERVERS"], protectPath)
 
 	var netDown atomic.Bool
@@ -101,9 +128,10 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		emitStatus(statusFatal, "write ready marker failed")
 		log.Fatalf("write ready marker: %v", err)
 	}
-	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d preset=%s auto=%v protect=%s",
-		actualPort, dl.Preset, dl.Auto, protectPath)
-	emitLog("preset=%s auto=%v lists=general/google/exclude", dl.Preset, dl.Auto)
+	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d preset=%s method=%s hostsMode=%s filter=%d auto=%v protect=%s",
+		actualPort, dl.Preset, opts.Method, opts.HostsMode, len(lists.filter), dl.Auto, protectPath)
+	emitLog("preset=%s method=%s hostsMode=%s filterHosts=%d builtin=%s",
+		dl.Preset, opts.Method, opts.HostsMode, len(lists.filter), builtinCSV)
 
 	sess := &session{
 		user:        user,
@@ -114,6 +142,7 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		lists:       lists,
 		preset:      dl.Preset,
 		auto:        dl.Auto,
+		opts:        opts,
 		netDown:     &netDown,
 	}
 
@@ -131,6 +160,7 @@ type session struct {
 	lists       hostLists
 	preset      string
 	auto        bool
+	opts        desyncOpts
 	netDown     *atomic.Bool
 }
 
@@ -203,9 +233,9 @@ func handleConn(c net.Conn, sess *session) {
 
 	presetName := sess.preset
 	matchHost := matchHostFromPayload(host, payload)
-	rule, preset, _ := selectRuleForPreset(presetName, matchHost, req.Port, sess.lists, payload)
-	log.Printf("desync apply preset=%s rule=%s socks=%s match=%s:%d payload=%d tls=%v",
-		preset.Name, rule.Name, host, matchHost, req.Port, len(payload), looksLikeTLSClientHello(payload))
+	rule, preset, _ := selectRuleForPreset(presetName, matchHost, req.Port, sess.lists, payload, sess.opts)
+	log.Printf("desync apply preset=%s rule=%s socks=%s match=%s:%d payload=%d tls=%v hostsMode=%s",
+		preset.Name, rule.Name, host, matchHost, req.Port, len(payload), looksLikeTLSClientHello(payload), sess.opts.HostsMode)
 
 	if err := applyPrimitives(up, matchHost, rule, payload); err != nil {
 		log.Printf("desync apply failed host=%s match=%s rule=%s err=%v", host, matchHost, rule.Name, err)

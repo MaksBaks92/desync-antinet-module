@@ -271,6 +271,98 @@ func writeEvenParts(c net.Conn, payload []byte, parts int) error {
 	return writeChunks(c, payload, pos)
 }
 
+func firstPos(positions []int, def int) int {
+	if len(positions) > 0 && positions[0] != 0 {
+		if positions[0] < 0 {
+			return def
+		}
+		return positions[0]
+	}
+	return def
+}
+
+func oobChar(b byte) byte {
+	if b == 0 {
+		return 'a'
+	}
+	return b
+}
+
+// writeDisorder — аналог byeDPI -dN: сначала хвост, потом голова.
+func writeDisorder(c net.Conn, payload []byte, pos int) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	if pos <= 0 {
+		pos = 1
+	}
+	if pos >= len(payload) {
+		pos = len(payload) / 2
+		if pos <= 0 {
+			_, err := c.Write(payload)
+			return err
+		}
+	}
+	if _, err := c.Write(payload[pos:]); err != nil {
+		return err
+	}
+	time.Sleep(1 * time.Millisecond)
+	_, err := c.Write(payload[:pos])
+	return err
+}
+
+// writeOOB — аналог byeDPI -oN -eX: голова, urgent byte, хвост.
+func writeOOB(c net.Conn, payload []byte, pos int, ch byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	if pos <= 0 {
+		pos = 1
+	}
+	if pos >= len(payload) {
+		pos = 1
+		if pos >= len(payload) {
+			_, err := c.Write(payload)
+			return err
+		}
+	}
+	if _, err := c.Write(payload[:pos]); err != nil {
+		return err
+	}
+	if err := sendTCPOOB(c, ch); err != nil {
+		return err
+	}
+	time.Sleep(1 * time.Millisecond)
+	_, err := c.Write(payload[pos:])
+	return err
+}
+
+// writeDisOOB — аналог byeDPI -qN: хвост, OOB, голова.
+func writeDisOOB(c net.Conn, payload []byte, pos int, ch byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	if pos <= 0 {
+		pos = 1
+	}
+	if pos >= len(payload) {
+		pos = len(payload) / 2
+		if pos <= 0 {
+			_, err := c.Write(payload)
+			return err
+		}
+	}
+	if _, err := c.Write(payload[pos:]); err != nil {
+		return err
+	}
+	if err := sendTCPOOB(c, ch); err != nil {
+		return err
+	}
+	time.Sleep(1 * time.Millisecond)
+	_, err := c.Write(payload[:pos])
+	return err
+}
+
 func applyTlsRec(c net.Conn, payload []byte, at int) (bool, error) {
 	// Базовый tlsrec: если это TLS record, отправить record hdr + at байт handshake,
 	// затем остаток отдельной записью (два write → два сегмента). Без пересборки length
@@ -345,6 +437,30 @@ func applyPrimitives(up net.Conn, host string, rule Rule, payload []byte) error 
 			}
 			if err := writeChunks(up, payload, pos); err != nil {
 				return err
+			}
+			wrote = true
+			return nil
+		case "disorder":
+			if err := writeDisorder(up, payload, firstPos(p.Positions, 1)); err != nil {
+				return err
+			}
+			wrote = true
+			return nil
+		case "oob":
+			if err := writeOOB(up, payload, firstPos(p.Positions, 1), oobChar(p.OOBChar)); err != nil {
+				log.Printf("desync: oob failed host=%s err=%v; fallback split", host, err)
+				if err2 := writeChunks(up, payload, []int{firstPos(p.Positions, 1)}); err2 != nil {
+					return err2
+				}
+			}
+			wrote = true
+			return nil
+		case "disoob":
+			if err := writeDisOOB(up, payload, firstPos(p.Positions, 1), oobChar(p.OOBChar)); err != nil {
+				log.Printf("desync: disoob failed host=%s err=%v; fallback disorder", host, err)
+				if err2 := writeDisorder(up, payload, firstPos(p.Positions, 1)); err2 != nil {
+					return err2
+				}
 			}
 			wrote = true
 			return nil

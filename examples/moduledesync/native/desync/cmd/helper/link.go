@@ -11,21 +11,22 @@ import (
 //
 // Формы:
 //
+//	desync://byedpi
 //	desync://general
 //	desync://alt#MyName
 //	desync://auto?auto=1
 //	desync://passthrough
 type desyncLink struct {
-	Preset   string // general|alt|alt2|youtube|discord|safe|auto|passthrough
+	Preset   string // byedpi|general|alt|alt2|youtube|discord|safe|auto|passthrough
 	Name     string // fragment
 	Auto     bool   // ?auto=1 или preset=auto
-	Explicit bool   // путь ссылки непустой (не дефолт general «от пустоты»)
+	Explicit bool   // путь ссылки непустой
 	Raw      string
 }
 
 func parseDesyncLink(raw string) (desyncLink, bool) {
 	t := strings.TrimSpace(raw)
-	out := desyncLink{Raw: t, Preset: "general"}
+	out := desyncLink{Raw: t, Preset: "byedpi"}
 	if !strings.HasPrefix(strings.ToLower(t), "desync://") {
 		return out, false
 	}
@@ -62,7 +63,7 @@ func parseDesyncLink(raw string) (desyncLink, bool) {
 		out.Auto = true
 	}
 	if !knownPreset(out.Preset) {
-		out.Preset = "general"
+		out.Preset = "byedpi"
 		out.Explicit = false
 	}
 	return out, true
