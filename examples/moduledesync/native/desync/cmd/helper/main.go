@@ -202,12 +202,13 @@ func handleConn(c net.Conn, sess *session) {
 	}
 
 	presetName := sess.preset
-	rule, preset, _ := selectRuleForPreset(presetName, host, req.Port, sess.lists)
-	log.Printf("desync apply preset=%s rule=%s host=%s:%d payload=%d",
-		preset.Name, rule.Name, host, req.Port, len(payload))
+	matchHost := matchHostFromPayload(host, payload)
+	rule, preset, _ := selectRuleForPreset(presetName, matchHost, req.Port, sess.lists, payload)
+	log.Printf("desync apply preset=%s rule=%s socks=%s match=%s:%d payload=%d tls=%v",
+		preset.Name, rule.Name, host, matchHost, req.Port, len(payload), looksLikeTLSClientHello(payload))
 
-	if err := applyPrimitives(up, host, rule, payload); err != nil {
-		log.Printf("desync apply failed host=%s rule=%s err=%v", host, rule.Name, err)
+	if err := applyPrimitives(up, matchHost, rule, payload); err != nil {
+		log.Printf("desync apply failed host=%s match=%s rule=%s err=%v", host, matchHost, rule.Name, err)
 		if sess.auto {
 			// Failover: попробовать следующие пресеты на НОВОМ dial невозможно без
 			// повторного CONNECT клиента; на уже открытом сокете меняем только «мягкие»

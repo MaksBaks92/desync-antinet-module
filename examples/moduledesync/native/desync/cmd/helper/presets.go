@@ -36,6 +36,15 @@ func presetGeneral() Preset {
 					{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
 				},
 			},
+			{
+				// Аналог ipset-all / filter без hostlist: после SNI-матча и list-матча.
+				Name:    "any-tls-http",
+				Buckets: []matchBucket{bucketAll},
+				Ports:   []uint16{80, 443, 2053, 2083, 2087, 2096, 8443},
+				Prims: []Primitive{
+					{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
+				},
+			},
 		},
 	}
 }
@@ -73,6 +82,15 @@ func presetAlt() Preset {
 					{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
 				},
 			},
+			{
+				Name:    "any-tls-http",
+				Buckets: []matchBucket{bucketAll},
+				Ports:   []uint16{80, 443, 2053, 2083, 2087, 2096, 8443},
+				Prims: []Primitive{
+					{Kind: "fake", FakeTTL: 1, FakeRepeats: 2, FakeSize: 1200},
+					{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
+				},
+			},
 		},
 	}
 }
@@ -103,6 +121,14 @@ func presetAlt2() Preset {
 				Name:    "general-alt2",
 				Buckets: []matchBucket{bucketGeneral, bucketDiscord},
 				Ports:   []uint16{80, 443},
+				Prims: []Primitive{
+					{Kind: "multisplit", Positions: []int{2}, SplitSNI: true, Parts: 3},
+				},
+			},
+			{
+				Name:    "any-tls-http",
+				Buckets: []matchBucket{bucketAll},
+				Ports:   []uint16{80, 443, 2053, 2083, 2087, 2096, 8443},
 				Prims: []Primitive{
 					{Kind: "multisplit", Positions: []int{2}, SplitSNI: true, Parts: 3},
 				},
@@ -161,6 +187,14 @@ func presetSafe() Preset {
 					{Kind: "split", Positions: []int{1}},
 				},
 			},
+			{
+				Name:    "any-tls-http",
+				Buckets: []matchBucket{bucketAll},
+				Ports:   []uint16{80, 443},
+				Prims: []Primitive{
+					{Kind: "split", Positions: []int{1}},
+				},
+			},
 		},
 	}
 }
@@ -188,12 +222,11 @@ func presetPassthrough() Preset {
 	}
 }
 
-func selectRuleForPreset(name string, host string, port uint16, lists hostLists) (Rule, Preset, bool) {
+func selectRuleForPreset(name string, host string, port uint16, lists hostLists, payload []byte) (Rule, Preset, bool) {
 	p := getPreset(name)
 	if p.Name == "passthrough" {
 		return p.Rules[0], p, true
 	}
-	// Для passthrough-like «любой порт» в safe нет — обычный select.
-	r, ok := selectRule(p, host, port, lists)
+	r, ok := selectRule(p, host, port, lists, payload)
 	return r, p, ok
 }

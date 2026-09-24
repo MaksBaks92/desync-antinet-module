@@ -19,15 +19,14 @@
 
 ## Установка в AntiNet
 
-**Сборка только в GitHub Actions** (локально артефакты не выпускаются). Берите готовые zip:
+**Сборка только в GitHub Actions.** Берите zip с
+[Releases](https://github.com/MaksBaks92/desync-antinet-module/releases) или Artifacts в Actions.
 
-1. [Actions](https://github.com/MaksBaks92/desync-antinet-module/actions) → последний успешный
-   `Release module bundles` → Artifacts `desync-dist-release`, **или**
-   [Releases](https://github.com/MaksBaks92/desync-antinet-module/releases) по тегу `v*`.
-2. Распакуйте нужный zip в каталог модулей AntiNet:
-   Desktop — `<exe>/modules/desync/`, Android — `filesDir/modules/desync/`.
-3. Добавьте конфиг, например `desync://general` или `desync://alt#YouTube`.
-4. В карточке модуля можно выбрать пресет и флаг auto.
+1. Распакуйте zip в `modules/desync/` (Desktop: рядом с exe; Android: filesDir).
+2. Добавьте конфиг `desync://general` (или другой пресет).
+3. Карточка модуля ведёт на репозиторий; автообновление — через `antinet-module.json` на `main`.
+
+После обновления с 1.0.0 → 1.0.1 переустановите бандл (или дождитесь авто-обновления, если `updateUrl` уже подхватился после ручной подстановки манифеста).
 
 ## Как работает
 

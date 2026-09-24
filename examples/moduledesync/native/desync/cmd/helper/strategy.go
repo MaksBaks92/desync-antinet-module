@@ -108,7 +108,8 @@ func bucketOK(b matchBucket, want []matchBucket) bool {
 }
 
 // selectRule — первое подходящее правило пресета.
-func selectRule(p Preset, host string, port uint16, lists hostLists) (Rule, bool) {
+// host — предпочтительно SNI/HTTP Host (не dial-IP): AntiNet часто даёт CONNECT по IP.
+func selectRule(p Preset, host string, port uint16, lists hostLists, payload []byte) (Rule, bool) {
 	b := lists.classify(host)
 	if b == bucketExclude {
 		return Rule{Name: "exclude-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
@@ -122,6 +123,37 @@ func selectRule(p Preset, host string, port uint16, lists hostLists) (Rule, bool
 		}
 		return r, true
 	}
-	// Нет матча hostlist → passthrough (как отсутствие фильтра winws).
+	// Fallback для broad-пресетов: на TLS/HTTP всё равно применять desync,
+	// иначе при CONNECT-по-IP (типичный путь sing-box) всё уходит в passthrough.
+	if p.Name != "youtube" && p.Name != "discord" && p.Name != "passthrough" {
+		if portOK(port, defaultPorts()) && (looksLikeTLSClientHello(payload) || looksLikeHTTP(payload)) {
+			return Rule{
+				Name: "tls-http-fallback",
+				Prims: fallbackPrims(p.Name),
+			}, true
+		}
+	}
 	return Rule{Name: "no-match-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
+}
+
+func fallbackPrims(preset string) []Primitive {
+	switch strings.ToLower(preset) {
+	case "alt", "auto":
+		return []Primitive{
+			{Kind: "fake", FakeTTL: 1, FakeRepeats: 2, FakeSize: 1200},
+			{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
+		}
+	case "alt2":
+		return []Primitive{
+			{Kind: "multisplit", Positions: []int{2}, SplitSNI: true, Parts: 3},
+		}
+	case "safe":
+		return []Primitive{
+			{Kind: "split", Positions: []int{1}},
+		}
+	default: // general
+		return []Primitive{
+			{Kind: "multisplit", Positions: []int{1}, SplitSNI: true, Parts: 2},
+		}
+	}
 }

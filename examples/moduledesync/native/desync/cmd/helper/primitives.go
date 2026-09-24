@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"golang.org/x/net/ipv4"
@@ -38,37 +39,50 @@ func resetConnTTL(c net.Conn) {
 	_ = setConnTTL(c, 64)
 }
 
-// findSNIOffset — грубый поиск TLS ClientHello SNI extension; -1 если нет.
+// findSNIOffset — смещение TLS extension server_name; -1 если нет.
 func findSNIOffset(b []byte) int {
+	_, off := parseTLSClientHelloSNI(b)
+	return off
+}
+
+// extractTLSServerName — hostname из ClientHello SNI (пустая строка если нет).
+func extractTLSServerName(b []byte) string {
+	name, _ := parseTLSClientHelloSNI(b)
+	return name
+}
+
+// parseTLSClientHelloSNI — имя + offset extension server_name.
+func parseTLSClientHelloSNI(b []byte) (string, int) {
 	// TLS record: type=0x16, ver, len; handshake type=0x01 ClientHello
 	if len(b) < 44 || b[0] != 0x16 {
-		return -1
+		return "", -1
 	}
-	// Skip record hdr (5) + hs hdr (4) + client_version(2) + random(32) = 43
+	if len(b) > 5 && b[5] != 0x01 {
+		return "", -1
+	}
 	i := 43
 	if i >= len(b) {
-		return -1
+		return "", -1
 	}
-	// session id
 	if i+1 > len(b) {
-		return -1
+		return "", -1
 	}
 	sidLen := int(b[i])
 	i++
 	i += sidLen
 	if i+2 > len(b) {
-		return -1
+		return "", -1
 	}
 	csLen := int(b[i])<<8 | int(b[i+1])
 	i += 2 + csLen
 	if i+1 > len(b) {
-		return -1
+		return "", -1
 	}
 	compLen := int(b[i])
 	i++
 	i += compLen
 	if i+2 > len(b) {
-		return -1
+		return "", -1
 	}
 	extLen := int(b[i])<<8 | int(b[i+1])
 	i += 2
@@ -79,12 +93,97 @@ func findSNIOffset(b []byte) int {
 	for i+4 <= end {
 		typ := int(b[i])<<8 | int(b[i+1])
 		l := int(b[i+2])<<8 | int(b[i+3])
+		extStart := i
 		if typ == 0x0000 { // server_name
-			return i // начало extension = типичная точка split «перед SNI»
+			j := i + 4
+			if j+2 > end {
+				return "", extStart
+			}
+			// list_len + name_type + name_len + name
+			j += 2
+			if j+3 > end {
+				return "", extStart
+			}
+			if b[j] != 0 { // host_name
+				return "", extStart
+			}
+			j++
+			nlen := int(b[j])<<8 | int(b[j+1])
+			j += 2
+			if j+nlen > end || nlen <= 0 {
+				return "", extStart
+			}
+			return string(b[j : j+nlen]), extStart
 		}
 		i += 4 + l
 	}
-	return -1
+	return "", -1
+}
+
+// extractHTTPHost — Host: из HTTP/1.x запроса.
+func extractHTTPHost(b []byte) string {
+	if len(b) < 8 {
+		return ""
+	}
+	// Быстрый отсев TLS
+	if b[0] == 0x16 {
+		return ""
+	}
+	s := string(b)
+	lower := strings.ToLower(s)
+	idx := strings.Index(lower, "\r\nhost:")
+	if idx < 0 {
+		idx = strings.Index(lower, "\nhost:")
+		if idx < 0 {
+			if strings.HasPrefix(lower, "host:") {
+				idx = 0
+			} else {
+				return ""
+			}
+		}
+	}
+	line := s[idx:]
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	// "Host:" / "\r\nHost:"
+	colon := strings.IndexByte(line, ':')
+	if colon < 0 {
+		return ""
+	}
+	host := strings.TrimSpace(line[colon+1:])
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.TrimSuffix(strings.ToLower(host), ".")
+}
+
+// matchHostFromPayload — SNI или HTTP Host; иначе SOCKS-label (часто уже IP).
+func matchHostFromPayload(socksHost string, payload []byte) string {
+	if sni := extractTLSServerName(payload); sni != "" {
+		return strings.ToLower(strings.TrimSuffix(sni, "."))
+	}
+	if h := extractHTTPHost(payload); h != "" {
+		return h
+	}
+	return strings.ToLower(strings.TrimSuffix(socksHost, "."))
+}
+
+func looksLikeTLSClientHello(b []byte) bool {
+	return len(b) >= 6 && b[0] == 0x16 && b[5] == 0x01
+}
+
+func looksLikeHTTP(b []byte) bool {
+	if len(b) < 4 || b[0] == 0x16 {
+		return false
+	}
+	s := string(b[:min(len(b), 16)])
+	for _, p := range []string{"GET ", "POST ", "HEAD ", "PUT ", "OPTIONS ", "CONNECT "} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func syntheticTLSFake(size int) []byte {
