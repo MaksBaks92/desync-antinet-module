@@ -4,10 +4,10 @@
     "desync"
   ],
   "name": "Desync",
-  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: OOB/split, списки доменов и подбор стратегий (proxy test).",
+  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: DEFAULT = tlsrec+OOB (-o1 -r-5+se), списки доменов и подбор стратегий.",
   "homepage": "https://github.com/MaksBaks92/desync-antinet-module",
   "updateUrl": "https://raw.githubusercontent.com/MaksBaks92/desync-antinet-module/main/antinet-module.json",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "license": "MIT",
   "handoverMode": "signal",
   "hostEvents": ["handover", "netlost", "netback", "stall", "dns"],
@@ -22,7 +22,7 @@
       "label": "Пресет",
       "default": "byedpi",
       "options": [
-        {"value": "byedpi", "label": "byedpi (как ByeByeDPI, OOB)"},
+        {"value": "byedpi", "label": "byedpi (DEFAULT: tlsrec+OOB)"},
         {"value": "general", "label": "general (multisplit)"},
         {"value": "alt", "label": "alt (fake+split)"},
         {"value": "alt2", "label": "alt2 (multisplit pos=2)"},
@@ -40,7 +40,7 @@
       "label": "Метод desync (byedpi)",
       "default": "oob",
       "options": [
-        {"value": "oob", "label": "OOB (как ByeByeDPI)"},
+        {"value": "oob", "label": "OOB+tlsrec (как ByeByeDPI DEFAULT)"},
         {"value": "disoob", "label": "Disorder+OOB"},
         {"value": "split", "label": "Split"},
         {"value": "disorder", "label": "Disorder"},

@@ -16,7 +16,7 @@ type searchStrategy struct {
 }
 
 var (
-	reShortFlag = regexp.MustCompile(`^-([fodsqrm])(-?\d+)`)
+	reShortFlag = regexp.MustCompile(`^-([fodsqm])(-?\d+)`)
 	reLongFake  = regexp.MustCompile(`(?i)^--fake`)
 	reLongSplit = regexp.MustCompile(`(?i)^--split$`)
 	reLongDis   = regexp.MustCompile(`(?i)^--disorder$`)
@@ -102,13 +102,19 @@ func parseByeDPICmd(cmd string) (searchStrategy, bool) {
 			continue
 		}
 
+		// -r-5+se / -r3+s: tlsrec с signed offset и якорями +s/+e (до regex, иначе +se теряется).
+		if len(t) >= 3 && t[0] == '-' && t[1] == 'r' {
+			addPrim(parseTlsRecPrim(t[2:]))
+			continue
+		}
+
 		m := reShortFlag.FindStringSubmatch(t)
 		if m == nil {
 			// -o1+s / -q1+s / -s3:5+sm без полного match на весь токен
 			if len(t) >= 3 && t[0] == '-' {
 				flag := t[1]
 				rest := t[2:]
-				if strings.ContainsAny(string(flag), "fodsqrm") {
+				if strings.ContainsAny(string(flag), "fodsqm") {
 					pos := parsePosToken(rest)
 					switch flag {
 					case 'o':
@@ -128,8 +134,6 @@ func parseByeDPICmd(cmd string) (searchStrategy, bool) {
 						if method == "oob" {
 							method = "fake"
 						}
-					case 'r':
-						addPrim(Primitive{Kind: "tlsrec", TlsRecAt: absInt(pos)})
 					case 'm':
 						addPrim(Primitive{Kind: "multisplit", Positions: []int{1}, Parts: absInt(pos)})
 						method = "multisplit"
@@ -162,8 +166,6 @@ func parseByeDPICmd(cmd string) (searchStrategy, bool) {
 			if method == "oob" {
 				method = "fake"
 			}
-		case "r":
-			addPrim(Primitive{Kind: "tlsrec", TlsRecAt: pos})
 		case "m":
 			addPrim(Primitive{Kind: "multisplit", Positions: []int{1}, Parts: pos})
 			method = "multisplit"
@@ -219,10 +221,53 @@ func parsePosToken(tok string) int {
 		return 1
 	}
 	if neg {
-		// byeDPI negative offset — берём abs как позицию split
+		// byeDPI negative offset для split/oob — abs как позиция
 		return v
 	}
 	return v
+}
+
+// parseTlsRecPrim — хвост после -r: "-5+se", "3+s", "1" → Primitive tlsrec с signed TlsRecAt.
+func parseTlsRecPrim(rest string) Primitive {
+	rest = strings.TrimSpace(rest)
+	p := Primitive{Kind: "tlsrec", TlsRecAt: 1}
+	if rest == "" {
+		return p
+	}
+	neg := false
+	tok := rest
+	if strings.HasPrefix(tok, "-") {
+		neg = true
+		tok = tok[1:]
+	} else if strings.HasPrefix(tok, "+") {
+		tok = tok[1:]
+	}
+	num := ""
+	for _, r := range tok {
+		if r >= '0' && r <= '9' {
+			num += string(r)
+		} else {
+			break
+		}
+	}
+	at := 1
+	if num != "" {
+		if v, err := strconv.Atoi(num); err == nil {
+			at = v
+		}
+	}
+	if neg {
+		at = -at
+	}
+	p.TlsRecAt = at
+	// +s / +e / +se / +es — якорь SNI (как byeDPI OFFSET_SNI / OFFSET_END)
+	flags := rest
+	if i := strings.IndexByte(flags, '+'); i >= 0 {
+		flags = strings.ToLower(flags[i:])
+		p.TlsRecSNI = strings.Contains(flags, "s") || strings.Contains(flags, "h")
+		p.TlsRecEnd = strings.Contains(flags, "e")
+	}
+	return p
 }
 
 func absInt(v int) int {

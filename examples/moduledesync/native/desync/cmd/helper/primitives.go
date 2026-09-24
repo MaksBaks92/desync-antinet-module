@@ -41,48 +41,47 @@ func resetConnTTL(c net.Conn) {
 
 // findSNIOffset — смещение TLS extension server_name; -1 если нет.
 func findSNIOffset(b []byte) int {
-	_, off := parseTLSClientHelloSNI(b)
-	return off
+	_, extOff, _, _ := parseTLSClientHelloSNI(b)
+	return extOff
 }
 
 // extractTLSServerName — hostname из ClientHello SNI (пустая строка если нет).
 func extractTLSServerName(b []byte) string {
-	name, _ := parseTLSClientHelloSNI(b)
+	name, _, _, _ := parseTLSClientHelloSNI(b)
 	return name
 }
 
-// parseTLSClientHelloSNI — имя + offset extension server_name.
-func parseTLSClientHelloSNI(b []byte) (string, int) {
+// parseTLSClientHelloSNI — имя, offset extension, absolute hostPos/hostLen (байты hostname).
+// hostPos совпадает с byeDPI host_pos (абсолютный offset в буфере).
+func parseTLSClientHelloSNI(b []byte) (name string, extStart, hostPos, hostLen int) {
+	extStart, hostPos, hostLen = -1, -1, 0
 	// TLS record: type=0x16, ver, len; handshake type=0x01 ClientHello
 	if len(b) < 44 || b[0] != 0x16 {
-		return "", -1
+		return "", -1, -1, 0
 	}
 	if len(b) > 5 && b[5] != 0x01 {
-		return "", -1
+		return "", -1, -1, 0
 	}
 	i := 43
 	if i >= len(b) {
-		return "", -1
-	}
-	if i+1 > len(b) {
-		return "", -1
+		return "", -1, -1, 0
 	}
 	sidLen := int(b[i])
 	i++
 	i += sidLen
 	if i+2 > len(b) {
-		return "", -1
+		return "", -1, -1, 0
 	}
 	csLen := int(b[i])<<8 | int(b[i+1])
 	i += 2 + csLen
 	if i+1 > len(b) {
-		return "", -1
+		return "", -1, -1, 0
 	}
 	compLen := int(b[i])
 	i++
 	i += compLen
 	if i+2 > len(b) {
-		return "", -1
+		return "", -1, -1, 0
 	}
 	extLen := int(b[i])<<8 | int(b[i+1])
 	i += 2
@@ -93,31 +92,31 @@ func parseTLSClientHelloSNI(b []byte) (string, int) {
 	for i+4 <= end {
 		typ := int(b[i])<<8 | int(b[i+1])
 		l := int(b[i+2])<<8 | int(b[i+3])
-		extStart := i
+		es := i
 		if typ == 0x0000 { // server_name
 			j := i + 4
 			if j+2 > end {
-				return "", extStart
+				return "", es, -1, 0
 			}
 			// list_len + name_type + name_len + name
 			j += 2
 			if j+3 > end {
-				return "", extStart
+				return "", es, -1, 0
 			}
 			if b[j] != 0 { // host_name
-				return "", extStart
+				return "", es, -1, 0
 			}
 			j++
 			nlen := int(b[j])<<8 | int(b[j+1])
 			j += 2
 			if j+nlen > end || nlen <= 0 {
-				return "", extStart
+				return "", es, -1, 0
 			}
-			return string(b[j : j+nlen]), extStart
+			return string(b[j : j+nlen]), es, j, nlen
 		}
 		i += 4 + l
 	}
-	return "", -1
+	return "", -1, -1, 0
 }
 
 // extractHTTPHost — Host: из HTTP/1.x запроса.
@@ -364,26 +363,70 @@ func writeDisOOB(c net.Conn, payload []byte, pos int, ch byte) error {
 }
 
 func applyTlsRec(c net.Conn, payload []byte, at int) (bool, error) {
-	// Базовый tlsrec: если это TLS record, отправить record hdr + at байт handshake,
-	// затем остаток отдельной записью (два write → два сегмента). Без пересборки length
-	// это «грубый» вариант; полноценный record-split как у ByeDPI — TODO.
-	if len(payload) < 6 || payload[0] != 0x16 {
+	// Legacy write-split path (absolute content pos). Prefer partTLS via applyPrimitives.
+	out, ok := partTLS(payload, at)
+	if !ok {
 		return false, nil
+	}
+	if err := writeChunks(c, out, []int{5 + at}); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// partTLS — byeDPI part_tls: один TLS record → два подряд в том же TCP-буфере (+5 байт).
+// contentPos — длина content первого record (байты handshake после 5-байтного hdr).
+func partTLS(payload []byte, contentPos int) ([]byte, bool) {
+	n := len(payload)
+	if n < 3 || contentPos < 0 || contentPos+5 > n {
+		return payload, false
+	}
+	if payload[0] != 0x16 {
+		return payload, false
+	}
+	rSz := int(payload[3])<<8 | int(payload[4])
+	if rSz < contentPos {
+		return payload, false
+	}
+	out := make([]byte, n+5)
+	copy(out[0:3], payload[0:3])
+	out[3] = byte(contentPos >> 8)
+	out[4] = byte(contentPos)
+	copy(out[5:5+contentPos], payload[5:5+contentPos])
+	copy(out[5+contentPos:5+contentPos+3], payload[0:3])
+	secondLen := rSz - contentPos
+	out[5+contentPos+3] = byte(secondLen >> 8)
+	out[5+contentPos+4] = byte(secondLen)
+	copy(out[5+contentPos+5:], payload[5+contentPos:n])
+	return out, true
+}
+
+// tlsRecContentPos — byeDPI gen_offset + pos-=5 для -rN[+s][+e].
+func tlsRecContentPos(payload []byte, p Primitive) int {
+	at := p.TlsRecAt
+	if p.TlsRecSNI {
+		_, _, hostPos, hostLen := parseTLSClientHelloSNI(payload)
+		if hostPos < 0 || hostLen <= 0 {
+			return -1
+		}
+		base := hostPos
+		if p.TlsRecEnd {
+			base = hostPos + hostLen
+		}
+		pos := at + base
+		// byeDPI: if (part.pos < 0 || part.flag) pos -= 5;
+		if at < 0 || p.TlsRecSNI {
+			pos -= 5
+		}
+		return pos
+	}
+	if at < 0 {
+		at = -at
 	}
 	if at <= 0 {
 		at = 3
 	}
-	splitAt := 5 + at
-	if splitAt >= len(payload) {
-		splitAt = len(payload) / 2
-	}
-	if splitAt <= 0 || splitAt >= len(payload) {
-		return false, nil
-	}
-	if err := writeChunks(c, payload, []int{splitAt}); err != nil {
-		return true, err
-	}
-	return true, nil
+	return at
 }
 
 // applyPrimitives — десинк первого payload; возвращает true если payload уже ушёл на wire.
@@ -483,14 +526,16 @@ func applyPrimitives(up net.Conn, host string, rule Rule, payload []byte) error 
 			wrote = true
 			return nil
 		case "tlsrec":
-			ok, err := applyTlsRec(up, payload, p.TlsRecAt)
-			if err != nil {
-				return err
+			// byeDPI: tamp-буфер до send-метода — не пишем на wire, не ставим wrote.
+			contentPos := tlsRecContentPos(payload, p)
+			if contentPos < 0 {
+				continue
 			}
-			if ok {
-				wrote = true
-				return nil
+			out, ok := partTLS(payload, contentPos)
+			if !ok {
+				continue
 			}
+			payload = out
 		default:
 			log.Printf("desync: unknown primitive %q host=%s", p.Kind, host)
 		}

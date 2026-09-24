@@ -17,8 +17,13 @@ type Primitive struct {
 	FakeRepeats int
 	FakeSize    int
 
-	TlsRecAt int
-	OOBChar  byte // для oob/disoob; 0 → 'a' как ByeByeDPI
+	// TlsRecAt — позиция content для part_tls (байты handshake после 5-байтного record hdr).
+	// При TlsRecSNI: как byeDPI -rN[+s][+e] — смещение относительно SNI (отрицательное = до якоря).
+	TlsRecAt  int
+	TlsRecSNI bool // якорь — hostname в SNI (flag +s)
+	TlsRecEnd bool // якорь — конец hostname (+e); иначе начало
+
+	OOBChar byte // для oob/disoob; 0 → 'a' как ByeByeDPI
 
 	Note string
 }
@@ -157,8 +162,12 @@ func byedpiPrims(opts desyncOpts) []Primitive {
 		}
 	case "multisplit":
 		return []Primitive{{Kind: "multisplit", Positions: []int{pos}, SplitSNI: true, Parts: 2}}
-	default: // oob — ByeByeDPI default
-		return []Primitive{{Kind: "oob", Positions: []int{pos}, OOBChar: oob}}
+	default: // oob — ByeByeDPI DEFAULT_CMD_ARGS "-o1 -a1 -r-5+se"
+		// tlsrec сначала (tamp буфера), затем OOB@pos. UDP -a1 — отдельный UDPASSOC path.
+		return []Primitive{
+			{Kind: "tlsrec", TlsRecAt: -5, TlsRecSNI: true, TlsRecEnd: true},
+			{Kind: "oob", Positions: []int{pos}, OOBChar: oob},
+		}
 	}
 }
 
