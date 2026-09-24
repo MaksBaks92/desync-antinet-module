@@ -274,6 +274,85 @@ func syntheticTLSFake(size int) []byte {
 	return buf
 }
 
+// makeTLSFake — TLS-фейк для DPI. При FakeSNI: клон реального CH с подменой SNI
+// (zapret fake-tls-mod=sni= + dupsid/rnd), иначе random blob.
+func makeTLSFake(orig []byte, p Primitive) []byte {
+	sni := strings.TrimSpace(p.FakeSNI)
+	if sni != "" {
+		if fake := rewriteTLSClientHelloSNI(orig, sni); len(fake) > 0 {
+			return fake
+		}
+		return buildTLSClientHello(sni)
+	}
+	return syntheticTLSFake(p.FakeSize)
+}
+
+// rewriteTLSClientHelloSNI — копия ClientHello с другим SNI; длины TLS поправлены.
+// session_id сохраняется (dupsid); random рандомизируется (rnd). Пустой срез — не CH.
+func rewriteTLSClientHelloSNI(orig []byte, newSNI string) []byte {
+	_, extStart, hostPos, hostLen := parseTLSClientHelloSNI(orig)
+	if hostPos < 0 || hostLen <= 0 || extStart < 2 {
+		return nil
+	}
+	sn := []byte(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(newSNI)), "."))
+	if len(sn) == 0 || len(sn) > 253 {
+		return nil
+	}
+	delta := len(sn) - hostLen
+	out := make([]byte, 0, len(orig)+delta)
+	out = append(out, orig[:hostPos]...)
+	out = append(out, sn...)
+	out = append(out, orig[hostPos+hostLen:]...)
+
+	// name_len
+	out[hostPos-2] = byte(len(sn) >> 8)
+	out[hostPos-1] = byte(len(sn))
+	// list_len = name_type(1) + name_len(2) + name
+	listLen := len(sn) + 3
+	out[hostPos-5] = byte(listLen >> 8)
+	out[hostPos-4] = byte(listLen)
+	// extension data length
+	oldExtLen := int(orig[extStart+2])<<8 | int(orig[extStart+3])
+	newExtLen := oldExtLen + delta
+	if newExtLen < 0 || newExtLen > 0xffff {
+		return nil
+	}
+	out[extStart+2] = byte(newExtLen >> 8)
+	out[extStart+3] = byte(newExtLen)
+	// total extensions length (2 bytes before first extension)
+	totOff := extStart - 2
+	oldTot := int(orig[totOff])<<8 | int(orig[totOff+1])
+	newTot := oldTot + delta
+	if newTot < 0 || newTot > 0xffff {
+		return nil
+	}
+	out[totOff] = byte(newTot >> 8)
+	out[totOff+1] = byte(newTot)
+	// handshake length (3 bytes at offset 6)
+	if len(out) < 9 {
+		return nil
+	}
+	hsLen := (int(orig[6])<<16 | int(orig[7])<<8 | int(orig[8])) + delta
+	if hsLen < 0 || hsLen > 0xffffff {
+		return nil
+	}
+	out[6] = byte(hsLen >> 16)
+	out[7] = byte(hsLen >> 8)
+	out[8] = byte(hsLen)
+	// record length
+	recLen := (int(orig[3])<<8 | int(orig[4])) + delta
+	if recLen < 0 || recLen > 0xffff {
+		return nil
+	}
+	out[3] = byte(recLen >> 8)
+	out[4] = byte(recLen)
+	// rnd: ClientHello.random (после record+hs hdr+version)
+	if len(out) >= 43 {
+		_, _ = rand.Read(out[11:43])
+	}
+	return out
+}
+
 func writeChunks(c net.Conn, payload []byte, positions []int) error {
 	if len(payload) == 0 {
 		return nil
@@ -521,7 +600,7 @@ func applyPrimitives(up net.Conn, host string, rule Rule, payload []byte) error 
 			if repeats <= 0 {
 				repeats = 1
 			}
-			fake := syntheticTLSFake(p.FakeSize)
+			fake := makeTLSFake(payload, p)
 			ttlOK := setConnTTL(up, ttl) == nil
 			for i := 0; i < repeats; i++ {
 				if _, err := up.Write(fake); err != nil {
@@ -536,6 +615,9 @@ func applyPrimitives(up net.Conn, host string, rule Rule, payload []byte) error 
 				resetConnTTL(up)
 			} else {
 				log.Printf("desync: fake TTL not set (OS/permission); sent fake anyway host=%s", host)
+			}
+			if p.FakeSNI != "" {
+				log.Printf("desync: fake white-sni=%s size=%d ttl=%d host=%s", p.FakeSNI, len(fake), ttl, host)
 			}
 			// fake не заменяет реальный payload — реальный уйдёт следующим примитивом или в конце
 		case "split":

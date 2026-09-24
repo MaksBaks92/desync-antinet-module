@@ -16,6 +16,7 @@ type Primitive struct {
 	FakeTTL     int
 	FakeRepeats int
 	FakeSize    int
+	FakeSNI     string // белый SNI в TLS-фейке (zapret --dpi-desync-fake-tls-mod=sni=…); пусто — random blob
 
 	// TlsRecAt — позиция content для part_tls (байты handshake после 5-байтного record hdr).
 	// При TlsRecSNI: как byeDPI -rN[+s][+e] — смещение относительно SNI (отрицательное = до якоря).
@@ -203,24 +204,24 @@ func softByedpiPrims(opts desyncOpts) []Primitive {
 	}
 }
 
-// cloudflareSoftPrims — CF: tlsrec+OOB/split → RST; passthrough/fake+disorder → silent-wall 0B.
-// fake (TTL умирает) + OOB без tlsrec/disorder — отвлечь DPI и не рвать CH.
+// cloudflareWhiteSNI — домен из «белого» списка DPI на CF-подсетях (16k whitelist).
+// Zapret: --dpi-desync=fake --dpi-desync-fake-tls-mod=sni=<white>.
+const cloudflareWhiteSNI = "www.google.com"
+
+// cloudflareSoftPrims — 16k на CF: DPI режет всё кроме whitelisted SNI.
+// Шлём валидный ClientHello с белым SNI @ TTL (до сервера не доходит), затем реальный CH soft-split.
 func cloudflareSoftPrims(opts desyncOpts) []Primitive {
 	pos := opts.SplitPos
 	if pos == 0 {
 		pos = 1
-	}
-	oob := opts.OOBChar
-	if oob == 0 {
-		oob = 'a'
 	}
 	ttl := opts.FakeTTL
 	if ttl <= 0 {
 		ttl = 8
 	}
 	return []Primitive{
-		{Kind: "fake", FakeTTL: ttl, FakeRepeats: 1, FakeSize: 1200},
-		{Kind: "oob", Positions: []int{pos}, OOBChar: oob},
+		{Kind: "fake", FakeTTL: ttl, FakeRepeats: 2, FakeSNI: cloudflareWhiteSNI},
+		{Kind: "split", Positions: []int{pos}},
 	}
 }
 
@@ -231,9 +232,9 @@ func selectRule(p Preset, host string, port uint16, lists hostLists, payload []b
 		return Rule{Name: "hosts-gate-passthrough", Prims: []Primitive{{Kind: "passthrough"}}}, true
 	}
 
-	// Cloudflare: fake+oob (не tlsrec, не disorder, не passthrough/split).
+	// Cloudflare / 16k whitelist: fake с белым SNI (не random blob, не disorder/oob).
 	if p.Name != "passthrough" && isCloudflareTarget(host, dialIP) && portOK(port, defaultPorts()) {
-		return Rule{Name: "cloudflare-fake-oob", Prims: cloudflareSoftPrims(opts)}, true
+		return Rule{Name: "cloudflare-white-sni", Prims: cloudflareSoftPrims(opts)}, true
 	}
 
 	if !protocolOK(opts, payload) && p.Name != "passthrough" {
