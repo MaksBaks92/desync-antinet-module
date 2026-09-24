@@ -15,6 +15,19 @@ AntiNet гонит трафик в helper → protect-dial → на **перво
 | whitelist / blacklist хостов | `hostsMode` + `userDomains` + builtin lists |
 | Свои списки доменов в UI | настройка «Свои домены» + `profileDir/user-hosts.txt` |
 
+## Подбор стратегий
+
+Аналог «Подбор стратегий» ByeByeDPI:
+
+1. Включите **Подбор стратегий при старте**.
+2. Домены берутся из активных списков (`builtinLists` + свои домены).
+3. Стратегии — встроенный `strategies.list` из ByeByeDPI (ciadpi CMD → SOCKS oob/split/…).
+4. Каждая стратегия: protect-dial :443 + desync(ClientHello) + ответ TLS.
+5. Результаты в `strategy_search_results.txt`, лучшая — `best_strategy.txt`.
+6. **Применить лучшую** / опционально choice из топа.
+
+Свой список: «Свой список стратегий» + поле CMD (как `byedpi_proxytest_commands`).
+
 ## Свои домены
 
 1. В карточке модуля: поле **Свои домены** (по одному на строку).

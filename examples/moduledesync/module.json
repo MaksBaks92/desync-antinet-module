@@ -4,10 +4,10 @@
     "desync"
   ],
   "name": "Desync",
-  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: OOB/split/disorder/fake, режим хостов all/whitelist/blacklist и свои списки доменов. Не VPN — AntiNet уже захватывает трафик.",
+  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: OOB/split, списки доменов и подбор стратегий (proxy test).",
   "homepage": "https://github.com/MaksBaks92/desync-antinet-module",
   "updateUrl": "https://raw.githubusercontent.com/MaksBaks92/desync-antinet-module/main/antinet-module.json",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "license": "MIT",
   "handoverMode": "signal",
   "hostEvents": ["handover", "netlost", "netback", "stall", "dns"],
@@ -82,7 +82,80 @@
       "type": "string",
       "label": "Встроенные списки",
       "default": "youtube,googlevideo",
-      "description": "Через запятую: youtube, googlevideo, discord, telegram, social, cloudflare, general. Пусто — только свои домены. Для whitelist/blacklist."
+      "description": "Через запятую: youtube, googlevideo, discord, telegram, social, cloudflare, general. Пусто — только свои домены. Для whitelist/blacklist и подбора."
+    },
+    {
+      "key": "strategySearch",
+      "type": "bool",
+      "label": "Подбор стратегий при старте",
+      "default": false,
+      "description": "Как «Подбор стратегий» в ByeByeDPI: прогон списка стратегий по доменам, скоринг, применение лучшей. Занимает время при подключении."
+    },
+    {
+      "key": "applyBestStrategy",
+      "type": "bool",
+      "label": "Применить лучшую",
+      "default": true,
+      "description": "После подбора сразу включить победившую стратегию."
+    },
+    {
+      "key": "askStrategyChoice",
+      "type": "bool",
+      "label": "Спросить выбор из топа",
+      "default": false,
+      "description": "Показать choice с топ-5 результатами (как «применить» в ByeByeDPI)."
+    },
+    {
+      "key": "useUserStrategies",
+      "type": "bool",
+      "label": "Свой список стратегий",
+      "default": false,
+      "description": "Вместо встроенного strategies.list (из ByeByeDPI) использовать поле ниже."
+    },
+    {
+      "key": "userStrategies",
+      "type": "string",
+      "label": "Стратегии (CMD)",
+      "default": "",
+      "description": "По одной ciadpi-команде на строку. Плейсхолдер {sni}. Имеет смысл при «Свой список стратегий»."
+    },
+    {
+      "key": "searchSNI",
+      "type": "string",
+      "label": "SNI для подбора",
+      "default": "google.com"
+    },
+    {
+      "key": "searchRequests",
+      "type": "int",
+      "label": "Запросов на домен",
+      "default": 1,
+      "min": 1,
+      "max": 5
+    },
+    {
+      "key": "searchTimeoutSec",
+      "type": "int",
+      "label": "Таймаут пробы (сек)",
+      "default": 4,
+      "min": 1,
+      "max": 30
+    },
+    {
+      "key": "searchDelayMs",
+      "type": "int",
+      "label": "Пауза между стратегиями (мс)",
+      "default": 300,
+      "min": 0,
+      "max": 5000
+    },
+    {
+      "key": "searchMaxSites",
+      "type": "int",
+      "label": "Макс. доменов в подборе",
+      "default": 12,
+      "min": 1,
+      "max": 50
     },
     {
       "key": "desyncHttps",

@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -94,13 +95,44 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 	lists.filter = buildFilterHosts(builtinCSV, userDomains, profileDir)
 	resolver := newProtectedResolver(cfg["DNS_SERVERS"], protectPath)
 
+	searchCfg := defaultSearchConfig()
+	if cfg["SETTING_strategySearch"] == "true" || cfg["SETTING_strategySearch"] == "1" {
+		searchCfg.Enabled = true
+	}
+	if v, ok := cfg["SETTING_applyBestStrategy"]; ok {
+		searchCfg.ApplyBest = v == "true" || v == "1"
+	}
+	if cfg["SETTING_askStrategyChoice"] == "true" || cfg["SETTING_askStrategyChoice"] == "1" {
+		searchCfg.AskChoice = true
+	}
+	if cfg["SETTING_useUserStrategies"] == "true" || cfg["SETTING_useUserStrategies"] == "1" {
+		searchCfg.UseUserList = true
+	}
+	searchCfg.UserList = cfg["SETTING_userStrategies"]
+	if v := strings.TrimSpace(cfg["SETTING_searchSNI"]); v != "" {
+		searchCfg.SNI = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_searchRequests"])); err == nil && v > 0 {
+		searchCfg.Requests = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_searchTimeoutSec"])); err == nil && v > 0 {
+		searchCfg.TimeoutSec = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_searchDelayMs"])); err == nil && v >= 0 {
+		searchCfg.DelayMs = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_searchConcurrency"])); err == nil && v > 0 {
+		searchCfg.Concurrency = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(cfg["SETTING_searchMaxSites"])); err == nil && v > 0 {
+		searchCfg.MaxSites = v
+	}
+
 	var netDown atomic.Bool
 
 	setHostEventHandler(func(event string) {
 		switch event {
 		case "handover":
-			// Нет долгоживущей сессии: новые CONNECT сами пойдут через новый protect/offtun.
-			// SOCKS listen не перебиндиваем (контракт MODULE_API).
 			emitProgress("%s", s.progressHandover)
 			emitLog(s.logHandover)
 		case "netlost":
@@ -112,7 +144,6 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		case "stall":
 			emitLog(s.logStall)
 		}
-		// dns= — канон shared/dns; обработчика нет намеренно.
 	})
 
 	ln, err := openListener(port, listenFd)
@@ -146,9 +177,32 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		netDown:     &netDown,
 	}
 
-	serveSocksListener(ln, func(c net.Conn) {
-		handleConn(c, sess)
-	})
+	// SOCKS принимаем сразу; подбор идёт параллельно (как тест в ByeByeDPI на живом прокси).
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		serveSocksListener(ln, func(c net.Conn) {
+			handleConn(c, sess)
+		})
+	}()
+
+	if searchCfg.Enabled {
+		best, scores, sok := runStrategySearch(searchCfg, lists, protectPath, resolver, profileDir, lang)
+		if sok {
+			chosen := best
+			if searchCfg.AskChoice {
+				if c, ok := pickStrategyChoice(profileDir, scores, lang); ok {
+					chosen = c
+				}
+			}
+			if searchCfg.ApplyBest || searchCfg.AskChoice {
+				applySearchBest(sess, chosen)
+				emitLog(s.searchAppliedFmt, chosen.Label)
+			}
+		}
+	}
+
+	<-serveDone
 	return 0
 }
 
@@ -160,8 +214,36 @@ type session struct {
 	lists       hostLists
 	preset      string
 	auto        bool
+	optsMu      sync.Mutex
 	opts        desyncOpts
+	overridePrims atomic.Value // []Primitive
 	netDown     *atomic.Bool
+}
+
+func (sess *session) currentOpts() desyncOpts {
+	sess.optsMu.Lock()
+	defer sess.optsMu.Unlock()
+	return sess.opts
+}
+
+func (sess *session) currentOverridePrims() []Primitive {
+	v := sess.overridePrims.Load()
+	if v == nil {
+		return nil
+	}
+	p, _ := v.([]Primitive)
+	return p
+}
+
+func shouldApplySearchOverride(rule Rule) bool {
+	switch rule.Name {
+	case "hosts-gate-passthrough", "proto-passthrough", "exclude-passthrough", "port-passthrough", "no-match-passthrough":
+		return false
+	}
+	if len(rule.Prims) == 1 && rule.Prims[0].Kind == "passthrough" {
+		return false
+	}
+	return true
 }
 
 func handleConn(c net.Conn, sess *session) {
@@ -233,9 +315,13 @@ func handleConn(c net.Conn, sess *session) {
 
 	presetName := sess.preset
 	matchHost := matchHostFromPayload(host, payload)
-	rule, preset, _ := selectRuleForPreset(presetName, matchHost, req.Port, sess.lists, payload, sess.opts)
+	curOpts := sess.currentOpts()
+	rule, preset, _ := selectRuleForPreset(presetName, matchHost, req.Port, sess.lists, payload, curOpts)
+	if ov := sess.currentOverridePrims(); len(ov) > 0 && shouldApplySearchOverride(rule) {
+		rule = Rule{Name: "search-override", Prims: ov}
+	}
 	log.Printf("desync apply preset=%s rule=%s socks=%s match=%s:%d payload=%d tls=%v hostsMode=%s",
-		preset.Name, rule.Name, host, matchHost, req.Port, len(payload), looksLikeTLSClientHello(payload), sess.opts.HostsMode)
+		preset.Name, rule.Name, host, matchHost, req.Port, len(payload), looksLikeTLSClientHello(payload), curOpts.HostsMode)
 
 	if err := applyPrimitives(up, matchHost, rule, payload); err != nil {
 		log.Printf("desync apply failed host=%s match=%s rule=%s err=%v", host, matchHost, rule.Name, err)
@@ -279,6 +365,17 @@ type uiStrings struct {
 	logNetLost         string
 	logNetBack         string
 	logStall           string
+	searchStart        string
+	searchStartFmt     string
+	searchProgressFmt  string
+	searchDone         string
+	searchNoStrategies string
+	searchNoSites      string
+	searchNoneWorked   string
+	searchBestFmt      string
+	searchAppliedFmt   string
+	searchChoiceTitle  string
+	searchChoiceText   string
 }
 
 var uiRU = uiStrings{
@@ -289,6 +386,17 @@ var uiRU = uiStrings{
 	logNetLost:         "сети нет — новые dial приостановлены",
 	logNetBack:         "сеть вернулась",
 	logStall:           "хост не дождался ответа через модуль — сеть не менялась",
+	searchStart:        "desync: подбор стратегий…",
+	searchStartFmt:     "подбор: %d стратегий × %d доменов × %d запросов",
+	searchProgressFmt:  "подбор %d/%d: %s",
+	searchDone:         "desync: подбор завершён",
+	searchNoStrategies: "подбор: нет стратегий (проверьте список)",
+	searchNoSites:      "подбор: нет доменов — заполните списки или «Свои домены»",
+	searchNoneWorked:   "подбор: ни одна стратегия не прошла",
+	searchBestFmt:      "лучшая стратегия: %s (%d/%d) — %s",
+	searchAppliedFmt:   "применена стратегия: %s",
+	searchChoiceTitle:  "Выбор стратегии",
+	searchChoiceText:   "Топ результатов подбора. Выберите стратегию для применения.",
 }
 
 var uiEN = uiStrings{
@@ -299,6 +407,17 @@ var uiEN = uiStrings{
 	logNetLost:         "no network — dials paused",
 	logNetBack:         "network is back",
 	logStall:           "host saw no answer through module — network unchanged",
+	searchStart:        "desync: strategy search…",
+	searchStartFmt:     "search: %d strategies × %d sites × %d requests",
+	searchProgressFmt:  "search %d/%d: %s",
+	searchDone:         "desync: strategy search done",
+	searchNoStrategies: "search: no strategies",
+	searchNoSites:      "search: no sites — fill domain lists or user domains",
+	searchNoneWorked:   "search: no strategy succeeded",
+	searchBestFmt:      "best strategy: %s (%d/%d) — %s",
+	searchAppliedFmt:   "applied strategy: %s",
+	searchChoiceTitle:  "Pick strategy",
+	searchChoiceText:   "Top search results. Choose a strategy to apply.",
 }
 
 func uiStringsFor(lang string) uiStrings {
