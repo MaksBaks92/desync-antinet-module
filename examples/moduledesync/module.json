@@ -47,7 +47,7 @@
         {"value": "fake", "label": "Fake+split"},
         {"value": "multisplit", "label": "Multisplit"}
       ],
-      "description": "Используется при пресете byedpi. Аналог byedpi_desync_method."
+      "description": "Используется при пресете byedpi. OOB = ByeByeDPI DEFAULT (-o1 -r-5+se): tlsrec tamp + OOB. Fake — TTL 8."
     },
     {
       "key": "splitPosition",
