@@ -165,9 +165,9 @@ func realMain(configContent, resolversPath, profileDir, protectPath string, list
 		emitStatus(statusFatal, "write ready marker failed")
 		log.Fatalf("write ready marker: %v", err)
 	}
-	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d ver=1.2.8 preset=%s method=%s hostsMode=%s udpFake=%d filter=%d auto=%v protect=%s",
+	log.Printf("desync helper: SOCKS5 on 127.0.0.1:%d ver=1.2.9 preset=%s method=%s hostsMode=%s udpFake=%d filter=%d auto=%v protect=%s",
 		actualPort, dl.Preset, opts.Method, opts.HostsMode, opts.UdpFakeCount, len(lists.filter), dl.Auto, protectPath)
-	emitLog("ver=1.2.8 preset=%s method=%s hostsMode=%s udpFake=%d filterHosts=%d builtin=%s",
+	emitLog("ver=1.2.9 preset=%s method=%s hostsMode=%s udpFake=%d filterHosts=%d builtin=%s",
 		dl.Preset, opts.Method, opts.HostsMode, opts.UdpFakeCount, len(lists.filter), builtinCSV)
 
 	sess := &session{

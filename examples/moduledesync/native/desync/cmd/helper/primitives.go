@@ -108,48 +108,51 @@ func (c *udpDesyncConn) Write(b []byte) (int, error) {
 
 // findSNIOffset — смещение TLS extension server_name; -1 если нет.
 func findSNIOffset(b []byte) int {
-	_, extOff, _, _ := parseTLSClientHelloSNI(b)
+	_, extOff, _, _, _ := parseTLSClientHelloSNI(b)
 	return extOff
 }
 
 // extractTLSServerName — hostname из ClientHello SNI (пустая строка если нет).
 func extractTLSServerName(b []byte) string {
-	name, _, _, _ := parseTLSClientHelloSNI(b)
+	name, _, _, _, _ := parseTLSClientHelloSNI(b)
 	return name
 }
 
-// parseTLSClientHelloSNI — имя, offset extension, absolute hostPos/hostLen (байты hostname).
-// hostPos совпадает с byeDPI host_pos (абсолютный offset в буфере).
-func parseTLSClientHelloSNI(b []byte) (name string, extStart, hostPos, hostLen int) {
-	extStart, hostPos, hostLen = -1, -1, 0
+// parseTLSClientHelloSNI — имя, offset SNI-extension, hostPos/hostLen, offset 2-байтного
+// extensions-length (поле сразу после compression_methods).
+// hostPos — абсолютный offset hostname в буфере (как byeDPI host_pos).
+// extTotOff нужен rewrite: SNI часто НЕ первое расширение (Chrome/ECH), нельзя брать sniExt-2.
+func parseTLSClientHelloSNI(b []byte) (name string, sniExtStart, hostPos, hostLen, extTotOff int) {
+	sniExtStart, hostPos, hostLen, extTotOff = -1, -1, 0, -1
 	// TLS record: type=0x16, ver, len; handshake type=0x01 ClientHello
 	if len(b) < 44 || b[0] != 0x16 {
-		return "", -1, -1, 0
+		return "", -1, -1, 0, -1
 	}
 	if len(b) > 5 && b[5] != 0x01 {
-		return "", -1, -1, 0
+		return "", -1, -1, 0, -1
 	}
 	i := 43
 	if i >= len(b) {
-		return "", -1, -1, 0
+		return "", -1, -1, 0, -1
 	}
 	sidLen := int(b[i])
 	i++
 	i += sidLen
 	if i+2 > len(b) {
-		return "", -1, -1, 0
+		return "", -1, -1, 0, -1
 	}
 	csLen := int(b[i])<<8 | int(b[i+1])
 	i += 2 + csLen
 	if i+1 > len(b) {
-		return "", -1, -1, 0
+		return "", -1, -1, 0, -1
 	}
 	compLen := int(b[i])
 	i++
 	i += compLen
 	if i+2 > len(b) {
-		return "", -1, -1, 0
+		return "", -1, -1, 0, -1
 	}
+	extTotOff = i
 	extLen := int(b[i])<<8 | int(b[i+1])
 	i += 2
 	end := i + extLen
@@ -163,27 +166,27 @@ func parseTLSClientHelloSNI(b []byte) (name string, extStart, hostPos, hostLen i
 		if typ == 0x0000 { // server_name
 			j := i + 4
 			if j+2 > end {
-				return "", es, -1, 0
+				return "", es, -1, 0, extTotOff
 			}
 			// list_len + name_type + name_len + name
 			j += 2
 			if j+3 > end {
-				return "", es, -1, 0
+				return "", es, -1, 0, extTotOff
 			}
 			if b[j] != 0 { // host_name
-				return "", es, -1, 0
+				return "", es, -1, 0, extTotOff
 			}
 			j++
 			nlen := int(b[j])<<8 | int(b[j+1])
 			j += 2
 			if j+nlen > end || nlen <= 0 {
-				return "", es, -1, 0
+				return "", es, -1, 0, extTotOff
 			}
-			return string(b[j : j+nlen]), es, j, nlen
+			return string(b[j : j+nlen]), es, j, nlen, extTotOff
 		}
 		i += 4 + l
 	}
-	return "", -1, -1, 0
+	return "", -1, -1, 0, extTotOff
 }
 
 // extractHTTPHost — Host: из HTTP/1.x запроса.
@@ -276,22 +279,79 @@ func syntheticTLSFake(size int) []byte {
 
 // makeTLSFake — TLS-фейк для DPI. При FakeSNI: клон реального CH с подменой SNI
 // (zapret fake-tls-mod=sni= + dupsid/rnd), иначе random blob.
+// makeTLSFake — Zapret-style fake-tls-mod=sni. После rewrite/fallback паддим до
+// max(len(orig), FakeSize, 200): 1.2.8 на miss слал ~77B hello; TTL/size в логах
+// с устройства показали FakeTTL=8 + size=77 как провал.
 func makeTLSFake(orig []byte, p Primitive) []byte {
 	sni := strings.TrimSpace(p.FakeSNI)
 	if sni != "" {
+		target := len(orig)
+		if p.FakeSize > target {
+			target = p.FakeSize
+		}
+		if target < 200 {
+			target = 200
+		}
 		if fake := rewriteTLSClientHelloSNI(orig, sni); len(fake) > 0 {
+			if target > len(fake) {
+				return padTLSClientHello(fake, target)
+			}
 			return fake
 		}
-		return buildTLSClientHello(sni)
+		return padTLSClientHello(buildTLSClientHello(sni), target)
 	}
 	return syntheticTLSFake(p.FakeSize)
 }
 
+// padTLSClientHello — добавляет TLS padding extension (0x0015), чтобы фейк был похож по размеру.
+func padTLSClientHello(hello []byte, target int) []byte {
+	if target <= len(hello) {
+		return hello
+	}
+	_, _, _, _, extTotOff := parseTLSClientHelloSNI(hello)
+	if extTotOff < 0 || extTotOff+2 > len(hello) {
+		return hello
+	}
+	// type(2)+len(2)+payload; минимум 4 байта заголовка
+	need := target - len(hello)
+	if need < 4 {
+		need = 4
+	}
+	padData := need - 4
+	if padData < 0 {
+		padData = 0
+	}
+	out := make([]byte, 0, len(hello)+need)
+	out = append(out, hello...)
+	out = append(out, 0x00, 0x15, byte(padData>>8), byte(padData))
+	out = append(out, make([]byte, padData)...)
+	delta := 4 + padData
+	oldTot := int(out[extTotOff])<<8 | int(out[extTotOff+1])
+	newTot := oldTot + delta
+	if newTot > 0xffff {
+		return hello
+	}
+	out[extTotOff] = byte(newTot >> 8)
+	out[extTotOff+1] = byte(newTot)
+	hsLen := (int(out[6])<<16 | int(out[7])<<8 | int(out[8])) + delta
+	out[6] = byte(hsLen >> 16)
+	out[7] = byte(hsLen >> 8)
+	out[8] = byte(hsLen)
+	recLen := (int(out[3])<<8 | int(out[4])) + delta
+	out[3] = byte(recLen >> 8)
+	out[4] = byte(recLen)
+	return out
+}
+
 // rewriteTLSClientHelloSNI — копия ClientHello с другим SNI; длины TLS поправлены.
 // session_id сохраняется (dupsid); random рандомизируется (rnd). Пустой срез — не CH.
+//
+// Важно: extensions-length берётся из extTotOff (после compression_methods), а НЕ из
+// sniExtStart-2. У Chrome/ECH перед SNI часто GREASE/key_share → sniExt-2 портит
+// oldTot → newTot>0xffff → nil → makeTLSFake падает в buildTLSClientHello (~77B).
 func rewriteTLSClientHelloSNI(orig []byte, newSNI string) []byte {
-	_, extStart, hostPos, hostLen := parseTLSClientHelloSNI(orig)
-	if hostPos < 0 || hostLen <= 0 || extStart < 2 {
+	_, extStart, hostPos, hostLen, extTotOff := parseTLSClientHelloSNI(orig)
+	if hostPos < 0 || hostLen <= 0 || extStart < 0 || extTotOff < 0 || extTotOff+2 > len(orig) {
 		return nil
 	}
 	sn := []byte(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(newSNI)), "."))
@@ -319,15 +379,14 @@ func rewriteTLSClientHelloSNI(orig []byte, newSNI string) []byte {
 	}
 	out[extStart+2] = byte(newExtLen >> 8)
 	out[extStart+3] = byte(newExtLen)
-	// total extensions length (2 bytes before first extension)
-	totOff := extStart - 2
-	oldTot := int(orig[totOff])<<8 | int(orig[totOff+1])
+	// total extensions length
+	oldTot := int(orig[extTotOff])<<8 | int(orig[extTotOff+1])
 	newTot := oldTot + delta
 	if newTot < 0 || newTot > 0xffff {
 		return nil
 	}
-	out[totOff] = byte(newTot >> 8)
-	out[totOff+1] = byte(newTot)
+	out[extTotOff] = byte(newTot >> 8)
+	out[extTotOff+1] = byte(newTot)
 	// handshake length (3 bytes at offset 6)
 	if len(out) < 9 {
 		return nil
@@ -551,7 +610,7 @@ func partTLS(payload []byte, contentPos int) ([]byte, bool) {
 func tlsRecContentPos(payload []byte, p Primitive) int {
 	at := p.TlsRecAt
 	if p.TlsRecSNI {
-		_, _, hostPos, hostLen := parseTLSClientHelloSNI(payload)
+		_, _, hostPos, hostLen, _ := parseTLSClientHelloSNI(payload)
 		if hostPos < 0 || hostLen <= 0 {
 			return -1
 		}

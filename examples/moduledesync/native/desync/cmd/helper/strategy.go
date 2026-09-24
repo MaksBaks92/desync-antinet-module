@@ -209,18 +209,17 @@ func softByedpiPrims(opts desyncOpts) []Primitive {
 const cloudflareWhiteSNI = "www.google.com"
 
 // cloudflareSoftPrims — 16k на CF: DPI режет всё кроме whitelisted SNI.
-// Шлём валидный ClientHello с белым SNI @ TTL (до сервера не доходит), затем реальный CH soft-split.
+// SOCKS не умеет badsum/IP-frag (zapret hostfakesplit): белый ClientHello @ TTL=1
+// (fake умирает до origin), затем реальный CH soft-split @ нормальный TTL.
 func cloudflareSoftPrims(opts desyncOpts) []Primitive {
 	pos := opts.SplitPos
 	if pos == 0 {
 		pos = 1
 	}
-	ttl := opts.FakeTTL
-	if ttl <= 0 {
-		ttl = 8
-	}
+	// TTL=1 обязателен на SOCKS-пути: FakeTTL=8 (дефолт byedpi / 1.2.8) доходит до CF → RST.
+	// FakeSize: на rewrite-miss не слать ~77B hello (1.2.8); после rewrite тоже добиваем размер.
 	return []Primitive{
-		{Kind: "fake", FakeTTL: ttl, FakeRepeats: 2, FakeSNI: cloudflareWhiteSNI},
+		{Kind: "fake", FakeTTL: 1, FakeRepeats: 2, FakeSNI: cloudflareWhiteSNI, FakeSize: 1200},
 		{Kind: "split", Positions: []int{pos}},
 	}
 }
