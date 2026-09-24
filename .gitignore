@@ -1,0 +1,42 @@
+# Выдача build.py — пересоздаётся, исходником не является.
+examples/*/dist/
+examples/*/dist-release/
+/dist-archive/
+
+# Выдача чужого тулчейна у доп. библиотек (MODULE_API.md §2.4): cargo, cmake и подобные.
+target/
+
+# Бамп-гиты апстрима (UPGRADE.md) — служебные и привязаны к путям конкретной машины.
+/.bumpgits/
+
+__pycache__/
+*.pyc
+
+# Каноны shared/*: build.py копирует их в main-пакет перед сборкой и удаляет после.
+# Своей копии у модуля быть не должно — список ведёт build.py (таблица CANONS).
+examples/moduledesync/native/desync/cmd/helper/offtun_adapter.go
+examples/moduledesync/native/desync/cmd/helper/offtun_darwin.go
+examples/moduledesync/native/desync/cmd/helper/offtun_linux.go
+examples/moduledesync/native/desync/cmd/helper/offtun_other.go
+examples/moduledesync/native/desync/cmd/helper/offtun_physiface.go
+examples/moduledesync/native/desync/cmd/helper/offtun_windows.go
+examples/moduledesync/native/desync/cmd/helper/protect_adapter_android.go
+examples/moduledesync/native/desync/cmd/helper/protect_android.go
+examples/moduledesync/native/desync/cmd/helper/protect_stat.go
+examples/moduledesync/native/desync/cmd/helper/lifecycle_android.go
+examples/moduledesync/native/desync/cmd/helper/lifecycle_dieparent_linux.go
+examples/moduledesync/native/desync/cmd/helper/lifecycle_dieparent_nonlinux.go
+examples/moduledesync/native/desync/cmd/helper/lifecycle_other.go
+examples/moduledesync/native/desync/cmd/helper/lifecycle_ready.go
+examples/moduledesync/native/desync/cmd/helper/hostproto.go
+examples/moduledesync/native/desync/cmd/helper/entry_android.go
+examples/moduledesync/native/desync/cmd/helper/entry_native.go
+examples/moduledesync/native/desync/cmd/helper/socks5shared.go
+examples/moduledesync/native/desync/cmd/helper/dnsshim_hostdns.go
+examples/moduledesync/native/desync/cmd/helper/dnsshim_netresolver.go
+examples/moduledesync/native/desync/cmd/helper/dnsshim_netresolver_test.go
+examples/moduledesync/native/desync/cmd/helper/dnsshim_system_android.go
+examples/moduledesync/native/desync/cmd/helper/dnsshim_system_unix.go
+examples/moduledesync/native/desync/cmd/helper/dnsshim_system_windows.go
+examples/moduledesync/native/desync/cmd/helper/dns_resolver.go
+examples/moduledesync/native/desync/cmd/helper/dns_resolver_test.go

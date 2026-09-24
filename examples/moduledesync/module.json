@@ -1,0 +1,61 @@
+{
+  "apiVersion": 1,
+  "schemes": [
+    "desync"
+  ],
+  "name": "Desync",
+  "description": "Локальный SOCKS5 с DPI-desync (ByeDPI-like): split/multisplit/fake/tlsrec и пресеты в духе Flowseal. Не VPN и не удалённый туннель — AntiNet уже захватывает трафик.",
+  "homepage": "",
+  "updateUrl": "",
+  "version": "1.0.0",
+  "license": "MIT",
+  "handoverMode": "signal",
+  "hostEvents": ["handover", "netlost", "netback", "stall", "dns"],
+  "parallelPing": false,
+  "socks5": true,
+  "socks5Udp": true,
+  "dnsResolver": true,
+  "settings": [
+    {
+      "key": "preset",
+      "type": "enum",
+      "label": "Пресет стратегии",
+      "default": "general",
+      "options": [
+        {"value": "general", "label": "general (multisplit)"},
+        {"value": "alt", "label": "alt (fake+split)"},
+        {"value": "alt2", "label": "alt2 (multisplit pos=2)"},
+        {"value": "youtube", "label": "youtube"},
+        {"value": "discord", "label": "discord"},
+        {"value": "safe", "label": "safe (мягкий split)"},
+        {"value": "auto", "label": "auto"},
+        {"value": "passthrough", "label": "passthrough (без desync)"}
+      ],
+      "description": "Перекрывает путь ссылки desync://<preset>, если задано в карточке модуля. Intent пресетов — как у Flowseal; seqovl/WinDivert на SOCKS-пути недоступны."
+    },
+    {
+      "key": "auto",
+      "type": "bool",
+      "label": "Auto failover",
+      "default": false,
+      "description": "Включить цепочку general→alt→alt2→safe (полный failover требует реконнекта клиента; в лог пишется подсказка)."
+    },
+    {
+      "key": "dialTimeoutSec",
+      "type": "int",
+      "label": "Таймаут дозвона (сек)",
+      "default": 5,
+      "min": 1,
+      "max": 60
+    }
+  ],
+  "helperBinary": {
+    "android": "libdesynchelper.so",
+    "desktop": "desync-helper"
+  },
+  "build": {
+    "goDir": "native/desync",
+    "goPkg": "./cmd/helper",
+    "ldflags": "-checklinkname=0"
+  }
+}
