@@ -106,3 +106,10 @@ func isYoutubeImageHost(host string) bool {
 		"ytimg.com",
 	})
 }
+
+// isGooglevideoHost — video CDN YouTube (rrN---sn-*.googlevideo.com, redirector).
+func isGooglevideoHost(host string) bool {
+	return hostMatch(host, []string{
+		"googlevideo.com",
+	})
+}

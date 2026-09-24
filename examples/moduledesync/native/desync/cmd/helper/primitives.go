@@ -106,10 +106,14 @@ func (c *udpDesyncConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b)
 }
 
-// findSNIOffset — смещение TLS extension server_name; -1 если нет.
+// findSNIOffset — середина hostname в SNI (zapret midsld-lite); -1 если нет.
+// Раньше возвращали sniExtStart — split до имени; для CF/hostfakesplit нужен разрез внутри host.
 func findSNIOffset(b []byte) int {
-	_, extOff, _, _, _ := parseTLSClientHelloSNI(b)
-	return extOff
+	_, _, hostPos, hostLen, _ := parseTLSClientHelloSNI(b)
+	if hostPos < 0 || hostLen < 2 {
+		return -1
+	}
+	return hostPos + hostLen/2
 }
 
 // extractTLSServerName — hostname из ClientHello SNI (пустая строка если нет).

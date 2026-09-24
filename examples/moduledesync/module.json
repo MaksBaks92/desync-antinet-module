@@ -4,10 +4,10 @@
     "desync"
   ],
   "name": "Desync",
-  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: DEFAULT = tlsrec+OOB+UDP fake; CF 16k = fake с белым SNI; превью YouTube (ggpht/ytimg) = soft-oob.",
+  "description": "Локальный SOCKS5 DPI-desync по модели ByeByeDPI: DEFAULT = tlsrec+OOB+UDP fake; CF 16k = white-SNI@TTL4+multisplit; googlevideo = fake+tlsrec+OOB; превью YT = soft-oob.",
   "homepage": "https://github.com/MaksBaks92/desync-antinet-module",
   "updateUrl": "https://raw.githubusercontent.com/MaksBaks92/desync-antinet-module/main/antinet-module.json",
-  "version": "1.2.9",
+  "version": "1.2.10",
   "license": "MIT",
   "handoverMode": "signal",
   "hostEvents": ["handover", "netlost", "netback", "stall", "dns"],
@@ -53,10 +53,10 @@
       "key": "udpFakeCount",
       "type": "int",
       "label": "UDP fake (QUIC)",
-      "default": 1,
+      "default": 2,
       "min": 0,
       "max": 10,
-      "description": "ByeByeDPI -aN: N нулевых UDP-датаграмм @ TTL 8 перед первым реальным (YouTube app / Discord). 0 — выкл."
+      "description": "ByeByeDPI -aN: N нулевых UDP @ TTL 8 перед первым реальным (YouTube app / Discord). 1.2.10 default=2."
     },
     {
       "key": "splitPosition",
